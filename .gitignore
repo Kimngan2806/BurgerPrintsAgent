@@ -1,0 +1,46 @@
+# Environment
+.env
+.env.local
+.env.*.local
+*-service-account.json
+totemic-vim-*.json
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# DuckDB
+*.duckdb
+*.duckdb.wal
+
+# Node
+node_modules/
+.next/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models cache
+.cache/
+models/
+
+# Docker
+docker-compose.override.yml
+
+# Harness
+.harness/*.log

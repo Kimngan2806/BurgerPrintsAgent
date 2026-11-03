@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 130" role="img" aria-labelledby="title">
+  <title id="title">BurgerPrint</title>
+  <text
+    x="8"
+    y="103"
+    fill="#0b58c7"
+    font-family="Arial Black, Arial, sans-serif"
+    font-size="112"
+    font-weight="900"
+    letter-spacing="-8"
+  >BURGER</text>
+  <text
+    x="540"
+    y="103"
+    fill="#f36b10"
+    font-family="Arial Black, Arial, sans-serif"
+    font-size="112"
+    font-weight="900"
+    letter-spacing="-8"
+  >PRINT</text>
+  <path
+    fill="#f36b10"
+    d="M946 12h40l-30 48h35l-62 64 18-49h-34z"
+  />
+</svg>

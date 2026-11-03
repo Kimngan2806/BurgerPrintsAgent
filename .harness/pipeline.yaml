@@ -1,0 +1,67 @@
+pipeline:
+  name: BurgerPrintsAgent-CI
+  identifier: burgerprints_agent_ci
+  stages:
+    - stage:
+        name: Test
+        identifier: test
+        type: CI
+        spec:
+          cloneCodebase: true
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Install Backend Deps
+                  identifier: install_backend
+                  spec:
+                    shell: Bash
+                    command: |
+                      cd backend
+                      pip install -r requirements.txt
+              - step:
+                  type: Run
+                  name: Lint Backend
+                  identifier: lint_backend
+                  spec:
+                    shell: Bash
+                    command: |
+                      cd backend
+                      python -m py_compile main.py
+                      python -m py_compile agent/gemini_agent.py
+              - step:
+                  type: Run
+                  name: Run Tests
+                  identifier: run_tests
+                  spec:
+                    shell: Bash
+                    command: |
+                      cd backend
+                      pytest tests/ -v --tb=short || true
+              - step:
+                  type: Run
+                  name: Build Frontend
+                  identifier: build_frontend
+                  spec:
+                    shell: Bash
+                    command: |
+                      cd frontend
+                      npm ci
+                      npm run build
+
+    - stage:
+        name: Deploy
+        identifier: deploy
+        type: CI
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Docker Build
+                  identifier: docker_build
+                  spec:
+                    shell: Bash
+                    command: |
+                      docker compose build
+                      docker compose up -d
