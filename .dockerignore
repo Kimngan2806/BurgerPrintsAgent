@@ -1,0 +1,17 @@
+.git
+.venv
+**/node_modules
+**/.next
+**/__pycache__
+**/.pytest_cache
+**/.env
+**/.env.*
+**/*.duckdb*
+**/*.sqlite3*
+backend/data
+**/*service-account*.json
+**/secrets
+totemic-vim-*.json
+api-collection.json
+api-docs.html
+docs

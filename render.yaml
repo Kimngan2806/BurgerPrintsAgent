@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: burgerprints-agent
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PRIMARY_MODEL_PROVIDER
+        value: gemini
+      - key: STORE_DISPLAY_NAME
+        value: BurgerPrints Demo
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: WORKSPACE_DB_PATH
+        value: /app/data/workspace.sqlite3
+      - key: DUCKDB_PATH
+        value: /app/data/catalog.duckdb
+      - key: FILE_STORAGE_PATH
+        value: /app/data/designs
+      - key: BUILD_SEARCH_INDEX_ON_STARTUP
+        value: "false"
+      - key: CACHE_SYNC_ON_STARTUP
+        value: "true"
+      - key: CATALOG_SYNC_INTERVAL_SECONDS
+        value: "21600"
+      - key: ORDER_SANDBOX
+        value: "true"
+      - key: ENABLE_ORDER_SUBMISSION
+        value: "false"
