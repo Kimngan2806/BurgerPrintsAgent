@@ -1,9 +1,7 @@
-import faiss
 import numpy as np
 import logging
 from typing import List, Dict
 from rank_bm25 import BM25Okapi
-from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +14,8 @@ class HybridSearch:
         self.is_ready = False
 
     def build_index(self, products: List[Dict]):
+        import faiss
+        from sentence_transformers import SentenceTransformer
         """Khởi tạo/Rebuild cả BM25 và FAISS index từ danh sách sản phẩm"""
         if not products:
             logger.warning("No products provided to build search index.")

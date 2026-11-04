@@ -154,13 +154,32 @@ class DuckDBStore:
             if name not in existing:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {column_type}")
 
-    def seed_products(self, products: List[Dict]):
+    def replace_snapshot(self, products, skus, providers):
+        if not products or not skus:
+            raise ValueError('Incomplete catalog snapshot; keeping last good catalog.')
+        product_ids = {p['id'] for p in products}
+        if len(product_ids) != len(products) or any(s.get('product_id') not in product_ids for s in skus):
+            raise ValueError('Invalid catalog relationships.')
+        if len({s['sku_code'] for s in skus}) != len(skus):
+            raise ValueError('Duplicate SKU codes.')
+        self.conn.execute('BEGIN TRANSACTION')
+        try:
+            self.seed_products(products, transaction=False)
+            self.seed_skus(skus, transaction=False)
+            self.seed_providers(providers, transaction=False)
+            self.conn.execute('COMMIT')
+        except BaseException:
+            self.conn.execute('ROLLBACK')
+            raise
+
+    def seed_products(self, products: List[Dict], transaction=True):
         """Cập nhật data sản phẩm vào DuckDB"""
         now = int(time.time())
         products = list({p.get("id"): p for p in products if p.get("id")}.values())
         
         # Dùng Appender để insert hàng loạt siêu nhanh
-        self.conn.execute("BEGIN TRANSACTION")
+        if transaction:
+            self.conn.execute("BEGIN TRANSACTION")
         self.conn.execute("DELETE FROM products") # Đơn giản hóa: xóa cũ, thêm mới
         
         for p in products:
@@ -190,13 +209,15 @@ class DuckDBStore:
                 now
             ))
             
-        self.conn.execute("COMMIT")
+        if transaction:
+            self.conn.execute("COMMIT")
         logger.info(f"Seeded {len(products)} products into DuckDB")
 
-    def seed_skus(self, skus: List[Dict]):
+    def seed_skus(self, skus: List[Dict], transaction=True):
         now = int(time.time())
         skus = list({s.get("sku_code"): s for s in skus if s.get("sku_code")}.values())
-        self.conn.execute("BEGIN TRANSACTION")
+        if transaction:
+            self.conn.execute("BEGIN TRANSACTION")
         self.conn.execute("DELETE FROM skus")
         for s in skus:
             self.conn.execute("""
@@ -212,13 +233,15 @@ class DuckDBStore:
                 s.get("price"), s.get("second_price"), s.get("addition_price"),
                 s.get("provider_name"), json.dumps(s.get("raw_json", {})), now
             ))
-        self.conn.execute("COMMIT")
+        if transaction:
+            self.conn.execute("COMMIT")
         logger.info(f"Seeded {len(skus)} SKUs into DuckDB")
 
-    def seed_providers(self, providers: List[Dict]):
+    def seed_providers(self, providers: List[Dict], transaction=True):
         now = int(time.time())
         providers = list({p.get("id"): p for p in providers if p.get("id")}.values())
-        self.conn.execute("BEGIN TRANSACTION")
+        if transaction:
+            self.conn.execute("BEGIN TRANSACTION")
         self.conn.execute("DELETE FROM providers")
         for p in providers:
             self.conn.execute("""
@@ -231,7 +254,8 @@ class DuckDBStore:
                 json.dumps(p.get("raw_json", p)),
                 now
             ))
-        self.conn.execute("COMMIT")
+        if transaction:
+            self.conn.execute("COMMIT")
         logger.info(f"Seeded {len(providers)} providers into DuckDB")
 
     def query_products(self, category: str = None, material: str = None, limit: int = 50) -> List[Dict]:
@@ -376,11 +400,6 @@ class DuckDBStore:
             "SELECT * FROM skus WHERE UPPER(sku_code) = UPPER(?) LIMIT 1",
             (sku_code,),
         ).fetchone()
-        if not row:
-            row = self.conn.execute(
-                "SELECT * FROM skus WHERE sku_code ILIKE ? LIMIT 1",
-                (f"%{sku_code}%",),
-            ).fetchone()
         if not row:
             return None
         columns = [column[0] for column in self.conn.description]

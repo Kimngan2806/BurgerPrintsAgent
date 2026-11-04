@@ -10,6 +10,9 @@ search_products_func = FunctionDeclaration(
     parameters={
         "type": "object",
         "properties": {
+            'color': {'type': 'string', 'description': 'Exact color from user requirements.'},
+            'size': {'type': 'string', 'description': 'Exact size from user requirements.'},
+            'max_price': {'type': 'number', 'description': 'Maximum known catalog base price in USD, not total landed cost.'},
             "query": {
                 "type": "string",
                 "description": "CÃ¢u query tÃ¬m kiáº¿m tá»± do (vÃ­ dá»¥: 'Ã¡o thun cotton mÃ¹a hÃ¨', 'premium mug')"
@@ -273,6 +276,18 @@ get_order_creation_status_func = FunctionDeclaration(
 agent_tools = Tool(
     function_declarations=[
         search_products_func,
+        FunctionDeclaration(name='calculate_profit', description='Calculate an estimated profit scenario with exact decimal arithmetic. All fees other than production_per_item are totals for the order. Omit unknown costs, never assume zero.', parameters={
+            'type': 'object', 'properties': {
+                **{k: {'type': 'number'} for k in ['sale_price', 'discount_percent', 'production_per_item', 'shipping_total', 'platform_total', 'other_total']},
+                'quantity': {'type': 'integer'}}, 'required': ['sale_price']}),
+        FunctionDeclaration(name='update_draft', description='Read the current persistent draft with no arguments. To edit, send its current version and complete lines/address. Cannot confirm or submit an order.', parameters={
+            'type': 'object', 'properties': {
+                'version': {'type': 'integer'},
+                'lines': {'type': 'array', 'items': {'type': 'object', 'properties': {
+                    'sku': {'type': 'string'}, 'quantity': {'type': 'integer'},
+                    'asset_id': {'type': 'string'}, 'position': {'type': 'string'}}, 'required': ['sku', 'quantity']}},
+                'address': {'type': 'object', 'properties': {key: {'type': 'string'} for key in ['name', 'street', 'city', 'state', 'zip', 'country']}}
+            }}),
         get_sku_info_func,
         get_base_cost_func,
         get_shipping_cost_func,
@@ -282,7 +297,5 @@ agent_tools = Tool(
         check_provider_status_func,
         check_region_support_func,
         get_order_creation_status_func,
-        prepare_order_review_func,
-        create_order_func
     ]
 )

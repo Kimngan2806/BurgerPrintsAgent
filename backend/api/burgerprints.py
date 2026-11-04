@@ -44,20 +44,22 @@ class BurgerPrintsClient:
             try:
                 url = f"{self.base_url}/{endpoint.lstrip('/')}"
                 if not settings.BURGERPRINTS_API_KEY:
-                    return {"success": True, "message": "Mock Order Created", "data": {"id": "ORD-123"}}
+                    return {"is_success": False, "message": "BurgerPrints API key is not configured."}
                     
                 response = await client.post(url, headers=self.headers, json=json_data)
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPStatusError as e:
                 logger.error(f"Error calling POST {endpoint}: {e}")
+                if e.response.status_code >= 500:
+                    return {"_uncertain": True, "message": "Server error after submission; reconcile by reference."}
                 try:
                     return e.response.json()
                 except Exception:
                     return {"is_success": False, "message": e.response.text or str(e), "errors": []}
             except Exception as e:
                 logger.error(f"Error calling POST {endpoint}: {e}")
-                return {"is_success": False, "message": str(e), "errors": []}
+                return {"_uncertain": True, "message": "Connection interrupted; reconcile the order before retrying.", "errors": []}
 
     # Mock Data Generator for stability when API fails or no key
     def _mock_data(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
@@ -130,7 +132,7 @@ class BurgerPrintsClient:
                         return self._normalize_product(detail or product)
                     except Exception as e:
                         logger.warning(f"Failed to fetch product detail {short_code}: {e}")
-                        return product
+                        raise
 
             product_details = await asyncio.gather(*(fetch_detail(p) for p in products))
 
@@ -297,10 +299,34 @@ class BurgerPrintsClient:
     async def check_sku_availability(self, sku_codes: List[str]) -> Dict[str, Any]:
         from cache.duckdb_store import db_store
 
-        return {
-            sku: "present_in_catalog" if db_store.get_sku_by_code(sku) else "not_found"
-            for sku in sku_codes
-        }
+        checked_at = time.time()
+        out = set()
+        complete = False
+        if settings.BURGERPRINTS_API_KEY:
+            try:
+                seen = 0
+                for page in range(1, 1001):
+                    response = await self._get('/product/outofstock', {'page': str(page), 'page_size': '500'})
+                    data = response.get('data')
+                    if response.get('code', 200) != 200 or not isinstance(data, dict) or not isinstance(data.get('result'), list):
+                        raise ValueError('Unverified stock schema')
+                    rows = data['result']
+                    for row in rows:
+                        if not isinstance(row.get('sku'), list):
+                            raise ValueError('Unverified SKU list')
+                        out.update(str(s).upper() for s in row['sku'])
+                    seen += len(rows)
+                    if seen >= int(data['total']):
+                        complete = True
+                        break
+                    if not rows:
+                        break
+            except Exception:
+                logger.warning('Stock feed unavailable; availability remains unknown.')
+        return {sku: {'status': ('out_of_stock' if sku.upper() in out else
+                    'not_listed_out_of_stock' if complete else 'unknown') if db_store.get_sku_by_code(sku) else 'not_found',
+                    'checked_at': checked_at, 'source': '/product/outofstock' if complete else 'unavailable',
+                    'note': 'Not listed does not guarantee order acceptance.'} for sku in sku_codes}
 
     async def check_provider_status(self, provider_ids: List[str]) -> Dict[str, Any]:
         return {
@@ -314,7 +340,9 @@ class BurgerPrintsClient:
 
     async def create_order(self, order: OrderRequest) -> OrderResponse:
         shipping_country = self._normalize_country_code(order.address.country)
-        reference_order_id = f"burgerprints-agent-{order.sku}-{int(time.time())}"
+        reference_order_id = order.reference_order_id
+        if not reference_order_id:
+            return OrderResponse(order_id='', status='error', message='Use the reviewed workspace draft flow.')
         payload = {
             "shipping_name": order.address.name,
             "shipping_address1": order.address.street,
@@ -329,10 +357,10 @@ class BurgerPrintsClient:
                     "catalog_sku": order.sku,
                     "quantity": order.quantity,
                     "design_url_front": order.design_url_front,
-                    "mockup_url_front": order.mockup_url_front or order.design_url_front,
+                    **({"mockup_url_front": order.mockup_url_front} if order.mockup_url_front else {}),
                 }
             ],
-            "sandbox": False,
+            "sandbox": settings.ORDER_SANDBOX,
             "fulfillment_partner": "BurgerPrintsAgent",
         }
         res = await self._post("/order", payload)
@@ -368,15 +396,15 @@ class BurgerPrintsClient:
             },
             "design": {
                 "design_url_front": order.design_url_front,
-                "mockup_url_front": order.mockup_url_front or order.design_url_front,
+                "mockup_url_front": order.mockup_url_front,
             },
             "shipping_services": shipping_services if isinstance(shipping_services, list) else [],
             "order_details": order_details if isinstance(order_details, dict) else {},
             "api_response": res if isinstance(res, dict) else {"raw": res},
         }
-        if is_success:
+        if is_success and order_id:
             return OrderResponse(
-                order_id=str(order_id or "UNKNOWN"),
+                order_id=str(order_id),
                 status="created",
                 message=res.get("message") or data.get("message") or "Order placed successfully",
                 **common,

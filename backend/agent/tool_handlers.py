@@ -14,6 +14,9 @@ bp_client = BurgerPrintsClient()
 
 def slim_product(product: dict) -> dict:
     return {
+        'image_url': _extract_product_image(product),
+        'catalog_updated_at': product.get('cached_at'),
+        'attribute_note': 'Material/category/techniques may be inferred from catalog description.',
         "id": product.get("id"),
         "name": product.get("name"),
         "display_name": product.get("display_name"),
@@ -53,14 +56,11 @@ def _json_value(value, fallback):
 def _extract_product_image(product: dict) -> str | None:
     raw = _json_value(product.get("raw_json"), {})
     candidates = [
-        product.get("design_url"),
-        product.get("url"),
         raw.get("image"),
         raw.get("image_url"),
         raw.get("thumbnail"),
         raw.get("thumbnail_url"),
         raw.get("mockup_url"),
-        raw.get("design_url"),
     ]
     images = raw.get("images") or raw.get("gallery") or []
     if isinstance(images, list):
@@ -99,12 +99,8 @@ def _extract_design_requirements(product: dict, sku: dict) -> dict:
         "design_url_front_required": True,
         "design_url_front_format": "Public http/https image URL. Example: https://domain.com/design-front.png or .jpg",
         "local_or_private_url_allowed": False,
-        "resolution_note": (
-            "BẮT BUỘC nói với user: 'Ảnh thiết kế phải đúng kích thước chuẩn của BurgerPrints. "
-            "Ví dụ với áo thun thường là 4500x5400 px hoặc 4800x5400 px, Cốc là 2700x1140 px. "
-            "Nếu sai kích thước hệ thống sẽ báo lỗi. Bạn lưu ý kiểm tra size trước khi gửi link.' "
-            "Design image must match BurgerPrints accepted resolutions."
-        ),
+        'resolution_note': 'Chưa có quy chuẩn theo SKU/vị trí in đã xác minh. Không áp dụng danh sách kích thước chung.',
+        'print_verified': False,
         "raw_requirements": raw_requirements,
     }
 
@@ -124,7 +120,32 @@ async def search_products(args: dict) -> dict:
             results = [item for item in results if material.lower() in item.get("material", "").lower()]
     else:
         results = db_store.query_products(category=category, material=material, limit=15)
-    return {"results": [slim_product(item) for item in results[:10]]}
+    color, size = args.get('color'), args.get('size')
+    max_price = args.get('max_price')
+    choices = []
+    for item in results:
+        variants = db_store.get_skus_for_product(item['id'])
+        variants = [v for v in variants if (not color or (v.get('color') or '').casefold() == color.casefold())
+                    and (not size or (v.get('size') or '').casefold() == size.casefold())]
+        if max_price is not None:
+            variants = [v for v in variants if v.get('price') is not None and _price_at_most(v['price'], max_price)]
+        if (color or size or max_price is not None) and not variants:
+            continue
+        choices.append({**slim_product(item), 'variants': [slim_sku(v) for v in variants[:50]], 'variant_count': len(variants),
+                        'availability': 'not_checked', 'currency': 'USD'})
+        if len(choices) == 3:
+            break
+    return {'results': choices, 'scope': 'Matching products within the searched catalog candidates',
+            'note': 'No match: ask which one condition to relax; never change constraints automatically.'}
+
+
+def _price_at_most(value, maximum):
+    from decimal import Decimal, InvalidOperation
+    try:
+        price, limit = Decimal(str(value)), Decimal(str(maximum))
+        return price.is_finite() and limit.is_finite() and price >= 0 and price <= limit
+    except InvalidOperation:
+        return False
 
 
 async def get_sku_info(args: dict) -> dict:
@@ -192,7 +213,8 @@ async def check_region_support(args: dict) -> dict:
 
 
 async def get_order_creation_status(args: dict) -> dict:
-    enabled = ff_manager.is_order_creation_enabled()
+    from core.config import settings
+    enabled = settings.ENABLE_ORDER_SUBMISSION and bool(settings.BURGERPRINTS_API_KEY)
     return {
         "ok": True,
         "code": "ORDER_CREATION_ENABLED" if enabled else "ORDER_CREATION_DISABLED",
@@ -249,38 +271,44 @@ async def prepare_order_review(args: dict) -> dict:
 
 
 async def create_order(args: dict) -> dict:
-    sku = str(args.get("sku", "")).strip()
-    sku_record = db_store.get_sku_by_code(sku)
-    address = OrderAddress(**(args.get("address") or {}))
+    return {'ok': False, 'code': 'DRAFT_CONFIRMATION_REQUIRED', 'error': 'Use the workspace review and confirmation flow.'}
 
-    availability = await bp_client.check_sku_availability([sku])
-    if str(availability.get(sku, "")).lower() not in {"active", "present_in_catalog"}:
-        return {"ok": False, "code": "SKU_INACTIVE", "error": f"SKU `{sku}` is not active."}
 
-    region_support = await bp_client.check_region_support([sku], address.country)
-    if not region_support.get("_unsupported") and region_support.get(sku) is not True:
-        return {"ok": False, "code": "REGION_NOT_SUPPORTED", "error": f"SKU `{sku}` does not support `{address.country}`."}
+async def update_draft(args: dict) -> dict:
+    from core.chat_context import owner_context, conversation_context
+    from core.workspace import workspace
+    from services.commerce import DraftInput, draft_body
+    from fastapi import HTTPException
+    owner, conversation_id = owner_context.get(), conversation_context.get()
+    if not owner or not conversation_id:
+        return {'ok': False, 'error': 'Authentication required.'}
+    conversation = workspace.get(owner, conversation_id, 'conversation')
+    ident = conversation.get('draft_id')
+    if not ident:
+        draft = workspace.create(owner, 'draft', DraftInput(version=1).model_dump(exclude={'version'}))
+        ident = draft['id']
+        body = {k: v for k, v in conversation.items() if k not in {'id', 'version', 'updated_at'}}
+        body['draft_id'] = ident
+        workspace.update(owner, conversation_id, 'conversation', conversation['version'], body)
+    else:
+        draft = workspace.get(owner, ident, 'draft')
+    if not args.get('lines') and not args.get('address'):
+        return {'ok': True, 'draft': draft}
+    try:
+        # Full replacement uses the version returned by the preceding read.
+        data = DraftInput(version=args.get('version', 0), lines=args.get('lines', draft['lines']),
+                          address=args.get('address', draft['address']), acknowledge_unverified_print=False)
+        body = draft_body(data)
+        for line in body['lines']:
+            if line['asset_id']:
+                workspace.get(owner, line['asset_id'], 'asset')
+        result = workspace.update(owner, ident, 'draft', data.version, body)
+        workspace.event(owner, 'draft_saved', ident)
+        return {'ok': True, 'draft': result, 'next': 'Open the draft panel to review and confirm.'}
+    except HTTPException as exc:
+        return {'ok': False, 'error': exc.detail}
 
-    provider_id = sku_record.get("provider_id")
-    provider_status = await bp_client.check_provider_status([provider_id])
-    if not provider_status.get("_unsupported") and str(provider_status.get(provider_id, "")).lower() != "active":
-        return {"ok": False, "code": "PROVIDER_INACTIVE", "error": f"Provider `{provider_id}` is not active."}
 
-    design_validation = await validate_design_url(str(args.get("design_url_front") or ""))
-    if not design_validation.ok:
-        return design_validation.to_dict()
-
-    result = await bp_client.create_order(
-        OrderRequest(
-            sku=sku,
-            quantity=args.get("quantity", 1),
-            address=address,
-            shipping_method=args.get("shipping_method", "standard"),
-            design_url_front=args.get("design_url_front"),
-            mockup_url_front=args.get("mockup_url_front"),
-        )
-    )
-    dumped = result.model_dump()
-    if dumped.get("status") == "created":
-        order_state.mark_order_created(args)
-    return dumped
+async def calculate_profit(args: dict) -> dict:
+    from services.commerce import profit
+    return profit(args)

@@ -11,9 +11,11 @@ services:
       - ./backend:/app
       - backend_cache:/app/.cache
       - backend_data:/app/data
-      - ./totemic-vim-467706-a3-2b41c9267c79.json:/app/vertex-service-account.json:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - DUCKDB_PATH=/app/data/catalog.duckdb
+      - WORKSPACE_DB_PATH=/app/data/workspace.sqlite3
+      - FILE_STORAGE_PATH=/app/data/designs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

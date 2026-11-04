@@ -247,11 +247,7 @@ def test_create_order_tool_does_not_call_real_api(monkeypatch):
         )
     )
 
-    assert result == {
-        "order_id": "TEST-ORDER-1",
-        "status": "created",
-        "message": "Order created in test",
-    }
+    assert result['code'] == 'DRAFT_CONFIRMATION_REQUIRED'
 
 
 async def _async_result(value):
@@ -275,6 +271,7 @@ def test_burgerprints_success_response_returns_full_order_details(monkeypatch):
 
     monkeypatch.setattr(client, "_post", fake_post)
     request = OrderRequest(
+        reference_order_id='test-stable-reference',
         sku=VALID_SKU,
         quantity=1,
         address=OrderAddress(**VALID_ADDRESS),

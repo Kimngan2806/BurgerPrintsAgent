@@ -37,6 +37,8 @@ SAFE_TOOLS = {
     "check_region_support",
     "get_order_creation_status",
     "prepare_order_review",
+    "update_draft",
+    "calculate_profit",
 }
 
 CRITICAL_TOOLS = {"create_order"}

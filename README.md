@@ -1,5 +1,7 @@
 # 🍔 BurgerPrintsAgent — POD Catalog Assistant
 
+> **Cập nhật 04/11/2026:** có workspace tài khoản ứng dụng, lịch sử, đơn nháp nhiều SKU, thư viện file, duyệt theo phiên bản, chống gửi trùng, tra cứu và callback tracking. Mặc định tắt gửi đơn và dùng sandbox khi bật. Xem [bàn giao, cấu hình và giới hạn nghiệm thu](docs/HANDOVER-2026-11-04.md). Các mô tả kiến trúc cũ bên dưới không thay thế bảng hiện trạng này.
+
 > **Từ hàng trăm xưởng đến một SKU hoàn hảo, để AI agent làm phần nặng nhọc.**
 
 AI conversational agent giúp sellers POD trên BurgerPrints tìm kiếm, so sánh, và chọn sản phẩm fulfillment qua ngôn ngữ tự nhiên (Tiếng Việt / English).

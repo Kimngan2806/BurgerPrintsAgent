@@ -17,6 +17,11 @@ class ToolExecutor:
 
     async def execute(self, name: str, args: Dict[str, Any], user_message: str = "", session_id: str = "") -> Dict[str, Any]:
         args = dict(args or {})
+        # Internal IDs must come from the authenticated request, never model arguments.
+        args.pop('_session_id', None)
+        if name in {'create_order', 'prepare_order_review'}:
+            return {'ok': False, 'code': 'DRAFT_CONFIRMATION_REQUIRED',
+                    'error': 'Use update_draft, then ask the user to review and confirm in the order panel. The AI cannot submit orders.'}
         if session_id:
             args.setdefault("_session_id", session_id)
         definition = self.registry.get(name)
@@ -54,6 +59,11 @@ class ToolExecutor:
                     (time.perf_counter() - started) * 1000,
                 )
                 if isinstance(result, dict):
+                    from core.chat_context import tool_events
+                    events = tool_events.get()
+                    if events is not None and name in {'search_products', 'get_sku_info', 'update_draft'}:
+                        events.append({'type': 'tool_result', 'tool': name, 'result': result,
+                                       'criteria': {k: v for k, v in args.items() if not k.startswith('_')}})
                     if name == "get_sku_info" and result.get("ok") and result.get("sku", {}).get("sku_code"):
                         order_state.mark_sku_presented(session_id, result["sku"]["sku_code"])
                     if name == "create_order" and result.get("status") == "created":

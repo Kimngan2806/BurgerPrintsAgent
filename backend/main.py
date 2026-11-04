@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +16,9 @@ from search.hybrid_search import hybrid_searcher
 from core.feature_flags import ff_manager
 from routers.chat import router as chat_router
 from routers.catalog_debug import router as catalog_debug_router
+from routers.workspace import router as workspace_router
+from core.workspace import current_owner
+from fastapi import Depends
 
 # Cấu hình logging
 logging.basicConfig(
@@ -37,7 +41,20 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Fast startup enabled: using DuckDB catalog without startup sync/vector index.")
         
-    yield
+    async def scheduled_sync():
+        while True:
+            await asyncio.sleep(max(60, settings.CATALOG_SYNC_INTERVAL_SECONDS))
+            await sync_catalog_to_cache()
+    sync_task = asyncio.create_task(scheduled_sync()) if settings.CATALOG_SYNC_INTERVAL_SECONDS > 0 else None
+    try:
+        yield
+    finally:
+        if sync_task:
+            sync_task.cancel()
+            try:
+                await sync_task
+            except asyncio.CancelledError:
+                pass
     
     logger.info("BurgerPrintsAgent Backend Shutting down...")
     db_store.close()
@@ -53,15 +70,16 @@ app = FastAPI(
 # Cấu hình CORS để frontend React gọi được
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Trong production nên set cụ thể url của frontend
-    allow_credentials=False,
+    allow_origins=[origin.strip() for origin in settings.CORS_ORIGINS.split(',')],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Đăng ký router
 app.include_router(chat_router, prefix="/api", tags=["Chat"])
-app.include_router(catalog_debug_router, prefix="/api", tags=["Catalog Debug"])
+app.include_router(catalog_debug_router, prefix="/api", tags=["Catalog Debug"], dependencies=[Depends(current_owner)])
+app.include_router(workspace_router, prefix="/api", tags=["Workspace"])
 
 @app.get("/health", tags=["System"])
 async def health_check():

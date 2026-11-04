@@ -28,3 +28,5 @@ _register("check_region_support", tool_handlers.check_region_support, RiskLevel.
 _register("get_order_creation_status", tool_handlers.get_order_creation_status, RiskLevel.READ_ONLY, 5, 0, {"order:read"}, True)
 _register("prepare_order_review", tool_handlers.prepare_order_review, RiskLevel.READ_ONLY, 15, 0, {"order:read"}, True)
 _register("create_order", tool_handlers.create_order, RiskLevel.CRITICAL, 15, 0, {"order:create"}, False)
+_register('update_draft', tool_handlers.update_draft, RiskLevel.CRITICAL, 10, 0, {'draft:write'}, False)
+_register('calculate_profit', tool_handlers.calculate_profit, RiskLevel.READ_ONLY, 5, 0, {'catalog:read'}, True)

@@ -50,6 +50,7 @@ class OrderAddress(BaseModel):
     country: str
 
 class OrderRequest(BaseModel):
+    reference_order_id: Optional[str] = None
     sku: str
     quantity: int = Field(default=1, gt=0)
     address: OrderAddress
@@ -72,8 +73,8 @@ class OrderResponse(BaseModel):
     normalized_error: Optional[Dict[str, Any]] = None
 
 class ChatRequest(BaseModel):
-    message: str
-    session_id: str
+    message: str = Field(min_length=1, max_length=10000)
+    session_id: str = Field(min_length=1, max_length=100)
 
 class ChatResponse(BaseModel):
     response: str

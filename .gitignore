@@ -19,6 +19,10 @@ env/
 # DuckDB
 *.duckdb
 *.duckdb.wal
+*.sqlite3*
+backend/data/
+api-docs.html
+api-collection.json
 
 # Node
 node_modules/
