@@ -160,7 +160,10 @@ async def process_chat_provider(session_id: str, message: str, sess_data: dict, 
                     for call in calls
                 ]
             )
-            response = await chat.send_tool_results(calls, results)
+            if session_type is GeminiChatSession and tool_round == MAX_TOOL_ROUNDS:
+                response = await chat.send_tool_results(calls, results, allow_tools=False)
+            else:
+                response = await chat.send_tool_results(calls, results)
 
         text = response["text"]
         if not text:

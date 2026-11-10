@@ -37,7 +37,8 @@ class GoogleChatSession:
         self.history.append(types.Content(role="user", parts=[types.Part(text=content)]))
         return await self._complete(allow_tools=True)
 
-    async def send_tool_results(self, calls: List[Dict[str, Any]], results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def send_tool_results(self, calls: List[Dict[str, Any]], results: List[Dict[str, Any]], *,
+                                allow_tools: bool = True) -> Dict[str, Any]:
         parts = [
             types.Part(function_response=types.FunctionResponse(
                 id=call.get("id"), name=call["name"], response=result,
@@ -45,7 +46,7 @@ class GoogleChatSession:
             for call, result in zip(calls, results)
         ]
         self.history.append(types.Content(role="user", parts=parts))
-        return await self._complete(allow_tools=True)
+        return await self._complete(allow_tools=allow_tools)
 
     async def force_final_answer(self) -> Dict[str, Any]:
         self.history.append(
