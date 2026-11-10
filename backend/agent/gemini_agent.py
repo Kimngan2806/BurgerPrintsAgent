@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import unicodedata
+from google.genai import errors as google_errors
 
 from core.config import settings
 from agent.domain_knowledge import build_domain_context
@@ -62,6 +63,8 @@ def is_waiting_placeholder(text: str) -> bool:
 
 def normalize_error_message(error: Exception) -> str:
     message = str(error)
+    if isinstance(error, google_errors.ServerError) and error.code == 503:
+        return "Gemini đang quá tải. Bạn thử gửi lại tin nhắn sau ít phút nhé."
     if "429" in message and "quota" in message.lower():
         return "Gemini API đã hết quota tạm thời. Vui lòng thử lại sau hoặc đổi API key khác."
     return message

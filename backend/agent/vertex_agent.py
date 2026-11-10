@@ -3,7 +3,7 @@ import logging
 from typing import Any, Dict, List
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from agent.byteplus_agent import build_openai_tools
 from agent.prompts import SYSTEM_PROMPT
@@ -116,3 +116,16 @@ class GeminiChatSession(GoogleChatSession):
         if not settings.GEMINI_API_KEY:
             raise RuntimeError("Thiếu GEMINI_API_KEY. Vui lòng cấu hình khóa Gemini trên máy chủ.")
         super().__init__(genai.Client(api_key=settings.GEMINI_API_KEY, vertexai=False), settings.GEMINI_MODEL)
+
+    async def _complete(self, allow_tools: bool) -> Dict[str, Any]:
+        try:
+            return await super()._complete(allow_tools)
+        except errors.ServerError as exc:
+            fallback = settings.GEMINI_FALLBACK_MODEL
+            # A model must receive its own history and thought signatures.
+            if (exc.code != 503 or not fallback or fallback == self.model
+                    or any(content.role == "model" for content in self.history)):
+                raise
+            logger.warning("Gemini model %s is unavailable; using %s for this chat.", self.model, fallback)
+            self.model = fallback
+            return await super()._complete(allow_tools)
