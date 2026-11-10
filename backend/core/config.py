@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     
     # AI Models
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.8-flash"
+    GEMINI_MODEL: str = "gemini-3.1-flash-lite"
     GEMINI_FALLBACK_MODEL: str = "gemini-3.6-flash"
     SEEDANCE_API_KEY: str = ""
     PRIMARY_MODEL_PROVIDER: str = "byteplus"
