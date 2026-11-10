@@ -8,6 +8,7 @@ from core.config import settings
 from agent.domain_knowledge import build_domain_context
 from core.session import session_manager
 from agent.byteplus_agent import BytePlusChatSession
+from agent.openrouter_agent import OpenRouterChatSession
 from agent.vertex_agent import GeminiChatSession, VertexChatSession
 from harness.default_tools import tool_registry
 from harness.tool_executor import ToolExecutor
@@ -113,6 +114,8 @@ async def process_chat(session_id: str, message: str):
     provider = settings.PRIMARY_MODEL_PROVIDER.lower()
     if provider == "vertex":
         session_type = VertexChatSession
+    elif provider == "openrouter":
+        session_type = OpenRouterChatSession
     elif provider == "byteplus" and settings.SEEDANCE_API_KEY:
         session_type = BytePlusChatSession
     else:
@@ -124,6 +127,7 @@ async def process_chat(session_id: str, message: str):
 
 async def process_chat_provider(session_id: str, message: str, sess_data: dict, session_type):
     try:
+        supports_tool_limit = session_type in (GeminiChatSession, OpenRouterChatSession)
         chat = sess_data["chat_session"]
         if not isinstance(chat, session_type):
             chat = session_type()
@@ -145,8 +149,8 @@ async def process_chat_provider(session_id: str, message: str, sess_data: dict, 
 
         while response["tool_calls"]:
             if tool_round >= MAX_TOOL_ROUNDS:
-                if session_type is GeminiChatSession:
-                    raise RuntimeError("Gemini đã vượt số lượt gọi công cụ. Vui lòng thử câu hỏi cụ thể hơn.")
+                if supports_tool_limit:
+                    raise RuntimeError("Chatbot đã vượt số lượt gọi công cụ. Vui lòng thử câu hỏi cụ thể hơn.")
                 logger.info("Provider reached max tool rounds; forcing final answer without more tools.")
                 response = await chat.force_final_answer()
                 break
@@ -160,7 +164,7 @@ async def process_chat_provider(session_id: str, message: str, sess_data: dict, 
                     for call in calls
                 ]
             )
-            if session_type is GeminiChatSession and tool_round == MAX_TOOL_ROUNDS:
+            if supports_tool_limit and tool_round == MAX_TOOL_ROUNDS:
                 response = await chat.send_tool_results(calls, results, allow_tools=False)
             else:
                 response = await chat.send_tool_results(calls, results)

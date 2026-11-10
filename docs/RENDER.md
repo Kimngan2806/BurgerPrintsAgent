@@ -43,6 +43,8 @@ Không cần nhập API key để build, mở giao diện, đăng ký tài kho�
 
 Nếu dùng BytePlus: đặt `PRIMARY_MODEL_PROVIDER=byteplus`, `SEEDANCE_API_KEY` và model/URL phù hợp thay cho key Gemini. Nếu dùng Vertex: cấu hình project/location và service account theo quy trình của Google, không commit file credential.
 
+Để chuyển sang OpenRouter miễn phí, đặt `PRIMARY_MODEL_PROVIDER=openrouter` và thêm `OPENROUTER_API_KEY` từ [OpenRouter](https://openrouter.ai/keys). Mặc định dùng [Gemma 4 31B (free)](https://openrouter.ai/google/gemma-4-31b-it%3Afree), có hỗ trợ gọi công cụ. Có thể đặt `OPENROUTER_MODEL` thành model khác có hậu tố `:free` và hỗ trợ gọi công cụ. Chatbot chỉ yêu cầu nhà cung cấp không thu thập dữ liệu và không chuyển sang model tính phí nếu không có endpoint phù hợp. `BURGERPRINTS_API_KEY` vẫn dùng riêng để đồng bộ catalog.
+
 ## Giới hạn đã chọn cho demo Free
 
 Theo [Render Free](https://render.com/docs/free), dịch vụ có thể ngủ sau 15 phút không hoạt động; khi restart, redeploy hoặc ngủ, thay đổi filesystem có thể bị mất. Vì SQLite, catalog và file upload đang nằm ở filesystem, tài khoản/lịch sử/đơn nháp/file của demo có thể mất. Không bật tạo đơn thật hoặc dùng demo này làm nơi lưu giao dịch cần giữ lâu dài.
