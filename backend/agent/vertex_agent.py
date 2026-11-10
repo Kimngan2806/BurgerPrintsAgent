@@ -12,7 +12,7 @@ from core.config import settings
 logger = logging.getLogger(__name__)
 
 
-def _vertex_tools() -> List[types.Tool]:
+def _google_tools() -> List[types.Tool]:
     declarations = []
     for tool in build_openai_tools():
         function = tool["function"]
@@ -26,15 +26,12 @@ def _vertex_tools() -> List[types.Tool]:
     return [types.Tool(function_declarations=declarations)]
 
 
-class VertexChatSession:
-    def __init__(self):
-        self.client = genai.Client(
-            vertexai=True,
-            project=settings.GOOGLE_CLOUD_PROJECT,
-            location=settings.GOOGLE_CLOUD_LOCATION,
-        )
+class GoogleChatSession:
+    def __init__(self, client: genai.Client, model: str, temperature: float | None = None):
+        self.client = client
+        self.model = model
+        self.temperature = temperature
         self.history: List[types.Content] = []
-        self.pending_calls: List[Dict[str, Any]] = []
 
     async def send_user_message(self, content: str) -> Dict[str, Any]:
         self.history.append(types.Content(role="user", parts=[types.Part(text=content)]))
@@ -42,7 +39,9 @@ class VertexChatSession:
 
     async def send_tool_results(self, calls: List[Dict[str, Any]], results: List[Dict[str, Any]]) -> Dict[str, Any]:
         parts = [
-            types.Part.from_function_response(name=call["name"], response=result)
+            types.Part(function_response=types.FunctionResponse(
+                id=call.get("id"), name=call["name"], response=result,
+            ))
             for call, result in zip(calls, results)
         ]
         self.history.append(types.Content(role="user", parts=parts))
@@ -67,15 +66,18 @@ class VertexChatSession:
     async def _complete(self, allow_tools: bool) -> Dict[str, Any]:
         config = types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
-            temperature=0.2,
-            tools=_vertex_tools() if allow_tools else None,
+            temperature=self.temperature,
+            tools=_google_tools() if allow_tools else None,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
         response = await self.client.aio.models.generate_content(
-            model=settings.VERTEX_MODEL,
+            model=self.model,
             contents=self.history,
             config=config,
         )
 
+        if not response.candidates or not response.candidates[0].content:
+            raise RuntimeError("Gemini không trả về nội dung. Vui lòng thử lại.")
         candidate_content = response.candidates[0].content
         self.history.append(candidate_content)
         tool_calls = []
@@ -84,17 +86,33 @@ class VertexChatSession:
             if part.function_call:
                 tool_calls.append(
                     {
-                        "id": f"vertex-{len(self.history)}-{len(tool_calls)}",
+                        "id": part.function_call.id,
                         "name": part.function_call.name,
                         "args": dict(part.function_call.args or {}),
                     }
                 )
-            elif part.text:
+            elif part.text and not part.thought:
                 text_parts.append(part.text)
 
         return {
             "text": "".join(text_parts),
             "tool_calls": tool_calls,
             "usage": {},
-            "model": settings.VERTEX_MODEL,
+            "model": self.model,
         }
+
+
+class VertexChatSession(GoogleChatSession):
+    def __init__(self):
+        super().__init__(genai.Client(
+            vertexai=True,
+            project=settings.GOOGLE_CLOUD_PROJECT,
+            location=settings.GOOGLE_CLOUD_LOCATION,
+        ), settings.VERTEX_MODEL, temperature=0.2)
+
+
+class GeminiChatSession(GoogleChatSession):
+    def __init__(self):
+        if not settings.GEMINI_API_KEY:
+            raise RuntimeError("Thiếu GEMINI_API_KEY. Vui lòng cấu hình khóa Gemini trên máy chủ.")
+        super().__init__(genai.Client(api_key=settings.GEMINI_API_KEY, vertexai=False), settings.GEMINI_MODEL)
