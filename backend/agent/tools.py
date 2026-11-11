@@ -6,7 +6,7 @@ import json
 # =======================================================
 search_products_func = FunctionDeclaration(
     name="search_products",
-    description="Tìm kiếm sản phẩm trong catalog dựa trên text query, danh mục, hoặc chất liệu. Tool này KHÔNG THỂ filter theo giá (price) hoặc thời gian ship. Nếu user yêu cầu tìm theo giá/ship, bạn vẫn chỉ có thể truyền query text (VD: 't-shirt') rồi SAU ĐÓ TỰ GỌI THÊM get_base_cost hoặc get_shipping_time để kiểm tra từng SKU.",
+    description="Tìm sản phẩm và SKU trong catalog. Truyền tên hoặc loại sản phẩm vào query, màu vào color, size vào size và giá gốc tối đa vào max_price. Ví dụ áo thun trắng: query='t-shirt', color='White'. Công cụ không kiểm tra tồn kho hoặc thời gian giao hàng.",
     parameters={
         "type": "object",
         "properties": {

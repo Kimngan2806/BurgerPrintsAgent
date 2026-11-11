@@ -172,6 +172,11 @@ class DuckDBStore:
             self.conn.execute('ROLLBACK')
             raise
 
+    def has_catalog(self) -> bool:
+        return self.conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM products) AND EXISTS (SELECT 1 FROM skus)"
+        ).fetchone()[0]
+
     def seed_products(self, products: List[Dict], transaction=True):
         """Cập nhật data sản phẩm vào DuckDB"""
         now = int(time.time())
@@ -286,7 +291,10 @@ class DuckDBStore:
             
         return results
 
-    def search_products_text(self, query_text: str = None, category: str = None, material: str = None, limit: int = 15) -> List[Dict]:
+    def search_products_text(
+        self, query_text: str = None, category: str = None, material: str = None, limit: int = 15,
+        *, color: str = None, size: str = None,
+    ) -> List[Dict]:
         """Fast DuckDB text search over stable catalog fields."""
         query = """
             SELECT *,
@@ -314,11 +322,11 @@ class DuckDBStore:
                 word_pattern = f"%{word}%"
                 query += """
                     AND (
-                        name ILIKE ? OR id ILIKE ? OR category ILIKE ? OR
+                        name ILIKE ? OR id ILIKE ? OR category ILIKE ? OR display_name ILIKE ? OR
                         description ILIKE ? OR material ILIKE ? OR print_techniques ILIKE ?
                     )
                 """
-                params.extend([word_pattern] * 6)
+                params.extend([word_pattern] * 7)
 
         if category:
             query += " AND category ILIKE ?"
@@ -327,6 +335,16 @@ class DuckDBStore:
         if material:
             query += " AND material ILIKE ?"
             params.append(f"%{material}%")
+
+        if color or size:
+            query += " AND EXISTS (SELECT 1 FROM skus WHERE skus.product_id = products.id"
+            if color:
+                query += " AND lower(trim(skus.color)) = lower(?)"
+                params.append(color)
+            if size:
+                query += " AND lower(trim(skus.size)) = lower(?)"
+                params.append(size)
+            query += ")"
 
         query += " ORDER BY score DESC, name LIMIT ?"
         params.append(limit)

@@ -86,6 +86,7 @@ async def health_check():
     payload = {
         "status": "ok", 
         "search_ready": True,
+        "catalog_ready": db_store.has_catalog(),
         "vector_search_ready": hybrid_searcher.is_ready,
         "harness_active": ff_manager.is_active()
     }

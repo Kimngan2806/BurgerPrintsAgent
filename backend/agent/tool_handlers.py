@@ -106,27 +106,43 @@ def _extract_design_requirements(product: dict, sku: dict) -> dict:
 
 
 async def search_products(args: dict) -> dict:
-    query = args.get("query")
-    category = args.get("category")
+    if not db_store.has_catalog():
+        return {"results": [], "code": "CATALOG_UNAVAILABLE",
+                "note": "Catalog chưa có dữ liệu đồng bộ. Không thể kết luận có hay không có sản phẩm khớp."}
+
+    query = (args.get("query") or "").strip()
+    category = (args.get("category") or "").strip()
     material = args.get("material")
-    if query:
-        if hybrid_searcher.is_ready:
-            results = db_store.query_products_by_ids(hybrid_searcher.search(query, top_k=15))
-        else:
-            results = db_store.search_products_text(query, category, material, limit=15)
+    color = (args.get("color") or "").strip()
+    size = (args.get("size") or "").strip()
+    if color.casefold() in {"trắng", "trang"}:
+        color = "White"
+    if category.casefold() in {"áo thun", "ao thun", "áo phông", "ao phong", "tee", "t shirt", "tshirt"}:
+        category = "t-shirt"
+    # Keep the white SKU constraint while searching for the product type in the catalog.
+    if color.casefold() == "white" and query.casefold() in {
+        "áo thun trắng", "ao thun trang", "áo phông trắng", "white t-shirt", "white t shirt", "white tee",
+    }:
+        query = "t-shirt"
+    if query.casefold() in {"áo thun", "ao thun", "áo phông", "ao phong", "t shirt", "tshirt"}:
+        query = "t-shirt"
+
+    if query and hybrid_searcher.is_ready and not (color or size):
+        results = db_store.query_products_by_ids(hybrid_searcher.search(query, top_k=15))
         if category:
             results = [item for item in results if category.lower() in item.get("category", "").lower()]
         if material:
             results = [item for item in results if material.lower() in item.get("material", "").lower()]
+    elif query or color or size:
+        results = db_store.search_products_text(query, category, material, color=color, size=size)
     else:
         results = db_store.query_products(category=category, material=material, limit=15)
-    color, size = args.get('color'), args.get('size')
     max_price = args.get('max_price')
     choices = []
     for item in results:
         variants = db_store.get_skus_for_product(item['id'])
-        variants = [v for v in variants if (not color or (v.get('color') or '').casefold() == color.casefold())
-                    and (not size or (v.get('size') or '').casefold() == size.casefold())]
+        variants = [v for v in variants if (not color or (v.get('color') or '').strip().casefold() == color.casefold())
+                    and (not size or (v.get('size') or '').strip().casefold() == size.casefold())]
         if max_price is not None:
             variants = [v for v in variants if v.get('price') is not None and _price_at_most(v['price'], max_price)]
         if (color or size or max_price is not None) and not variants:
