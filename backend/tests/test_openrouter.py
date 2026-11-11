@@ -2,24 +2,31 @@ import asyncio
 import json
 
 import httpx
+import pytest
 
 from agent import gemini_agent
 from core.config import settings
 
 
-def test_openrouter_uses_catalog_result_to_finish_chat(monkeypatch):
-    monkeypatch.setattr(settings, "PRIMARY_MODEL_PROVIDER", "openrouter")
-    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", "test-key")
+@pytest.mark.parametrize("provider_name", ["openrouter", "vietcod"])
+def test_openai_compatible_provider_uses_catalog_result_to_finish_chat(monkeypatch, provider_name):
+    monkeypatch.setattr(settings, "PRIMARY_MODEL_PROVIDER", provider_name)
+    monkeypatch.setattr(settings, f"{provider_name.upper()}_API_KEY", "test-key")
     monkeypatch.setattr(gemini_agent, "MAX_TOOL_ROUNDS", 1)
     requests = []
 
     def provider(request):
-        assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
         assert request.headers["authorization"] == "Bearer test-key"
         payload = json.loads(request.content)
         requests.append(payload)
-        assert payload["model"].endswith(":free")
-        assert payload["provider"] == {"require_parameters": True, "data_collection": "deny"}
+        if provider_name == "openrouter":
+            assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
+            assert payload["model"].endswith(":free")
+            assert payload["provider"] == {"require_parameters": True, "data_collection": "deny"}
+        else:
+            assert str(request.url) == "https://router.vietcod.com/v1/chat/completions"
+            assert payload["model"] == "gemini-3.8-flash-high"
+            assert payload["stream"] is False
         if len(requests) == 1:
             assert any(tool["function"]["name"] == "search_products" for tool in payload["tools"])
             message = {"role": "assistant", "tool_calls": [{
@@ -43,7 +50,7 @@ def test_openrouter_uses_catalog_result_to_finish_chat(monkeypatch):
     monkeypatch.setattr(gemini_agent, "execute_tool", catalog)
 
     async def chat():
-        return [event["data"] async for event in gemini_agent.process_chat("openrouter-test", "Tìm áo thun")]
+        return [event["data"] async for event in gemini_agent.process_chat(f"{provider_name}-test", "Tìm áo thun")]
 
     events = asyncio.run(chat())
     assert events[-1] == "[DONE]"

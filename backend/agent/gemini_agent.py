@@ -9,6 +9,7 @@ from agent.domain_knowledge import build_domain_context
 from core.session import session_manager
 from agent.byteplus_agent import BytePlusChatSession
 from agent.openrouter_agent import OpenRouterChatSession
+from agent.vietcod_agent import VietCodChatSession
 from agent.vertex_agent import GeminiChatSession, VertexChatSession
 from harness.default_tools import tool_registry
 from harness.tool_executor import ToolExecutor
@@ -116,6 +117,8 @@ async def process_chat(session_id: str, message: str):
         session_type = VertexChatSession
     elif provider == "openrouter":
         session_type = OpenRouterChatSession
+    elif provider == "vietcod":
+        session_type = VietCodChatSession
     elif provider == "byteplus" and settings.SEEDANCE_API_KEY:
         session_type = BytePlusChatSession
     else:
@@ -127,7 +130,7 @@ async def process_chat(session_id: str, message: str):
 
 async def process_chat_provider(session_id: str, message: str, sess_data: dict, session_type):
     try:
-        supports_tool_limit = session_type in (GeminiChatSession, OpenRouterChatSession)
+        supports_tool_limit = session_type in (GeminiChatSession, OpenRouterChatSession, VietCodChatSession)
         chat = sess_data["chat_session"]
         if not isinstance(chat, session_type):
             chat = session_type()

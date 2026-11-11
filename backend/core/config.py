@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     GEMINI_FALLBACK_MODEL: str = "gemini-3.6-flash"
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_MODEL: str = "google/gemma-4-31b-it:free"
+    VIETCOD_API_KEY: str = ""
+    VIETCOD_MODEL: str = "gemini-3.8-flash-high"
     SEEDANCE_API_KEY: str = ""
     PRIMARY_MODEL_PROVIDER: str = "byteplus"
     BYTEPLUS_API_BASE_URL: str = "https://ark.ap-southeast.bytepluses.com/api/v3"
