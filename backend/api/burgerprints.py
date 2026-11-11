@@ -112,8 +112,9 @@ class BurgerPrintsClient:
         if not fetch_details:
             return products, [], []
 
-        product_details = []
-        skus = []
+        products_by_id: Dict[str, Dict[str, Any]] = {}
+        skus_by_code: Dict[str, Dict[str, Any]] = {}
+        conflicting_codes: set[str] = set()
         providers_by_id: Dict[str, Dict[str, Any]] = {}
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -129,15 +130,26 @@ class BurgerPrintsClient:
                         response = await client.get(url, headers=self.headers)
                         response.raise_for_status()
                         detail = (response.json().get("data") or {})
-                        return self._normalize_product(detail or product)
+                        return self._normalize_product({**product["raw_json"], **detail}) if detail else product
                     except Exception as e:
                         logger.warning(f"Failed to fetch product detail {short_code}: {e}")
                         raise
 
-            product_details = await asyncio.gather(*(fetch_detail(p) for p in products))
+            # Pagination can repeat the same list row. Fetch each endpoint once.
+            unique_bases = {p["id"]: p for p in products if p["id"]}
+            product_details = await asyncio.gather(*(fetch_detail(p) for p in unique_bases.values()))
 
         for product in product_details:
+            product_id = product["id"]
+            if not product_id:
+                continue
+            # Multiple list entries can resolve to the same canonical product.
+            products_by_id.setdefault(product_id, product)
             for variation in product.get("variations", []):
+                sku_code = (variation.get("sku") or "").strip()
+                sku_key = sku_code.upper()
+                if not sku_key or sku_key in conflicting_codes:
+                    continue
                 provider_id = str(variation.get("partner_id") or "")
                 provider_name = str(variation.get("partner_name") or "")
                 if provider_id and provider_id not in providers_by_id:
@@ -147,9 +159,9 @@ class BurgerPrintsClient:
                         "location": self._infer_location(product.get("id", "")),
                         "countries_served": [],
                     }
-                skus.append({
-                    "sku_code": variation.get("sku"),
-                    "product_id": product.get("id"),
+                sku = {
+                    "sku_code": sku_code,
+                    "product_id": product_id,
                     "color": variation.get("color"),
                     "size": variation.get("size"),
                     "material": product.get("material", ""),
@@ -161,10 +173,20 @@ class BurgerPrintsClient:
                     "second_price": variation.get("2nd_price"),
                     "addition_price": variation.get("addition_price"),
                     "provider_name": provider_name,
-                    "raw_json": variation,
-                })
+                }
+                previous = skus_by_code.get(sku_key)
+                if previous is not None and any(previous[key] != value for key, value in sku.items() if key != "sku_code"):
+                    # A SKU is used for orders as a unique identifier. Omit ambiguous codes.
+                    conflicting_codes.add(sku_key)
+                    del skus_by_code[sku_key]
+                    continue
+                skus_by_code.setdefault(sku_key, {**sku, "raw_json": variation})
 
-        return product_details, skus, list(providers_by_id.values())
+        logger.info(
+            "Prepared catalog snapshot: %s products, %s SKUs, %s conflicting SKU codes excluded.",
+            len(products_by_id), len(skus_by_code), len(conflicting_codes),
+        )
+        return list(products_by_id.values()), list(skus_by_code.values()), list(providers_by_id.values())
 
     async def _fetch_all_product_bases(self) -> List[Dict[str, Any]]:
         if not settings.BURGERPRINTS_API_KEY:
