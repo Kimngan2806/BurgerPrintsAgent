@@ -3,6 +3,9 @@ import time
 import json
 import logging
 from typing import List, Dict, Any, Optional
+
+import pandas as pd
+
 from core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -221,23 +224,25 @@ class DuckDBStore:
     def seed_skus(self, skus: List[Dict], transaction=True):
         now = int(time.time())
         skus = list({s.get("sku_code"): s for s in skus if s.get("sku_code")}.values())
+        columns = (
+            "sku_code", "product_id", "color", "size", "material", "provider_id",
+            "size_id", "color_id", "color_hex", "price", "second_price", "addition_price", "provider_name",
+        )
+        rows = pd.DataFrame(
+            [{**{column: s.get(column) for column in columns},
+              "raw_json": json.dumps(s.get("raw_json", {})), "cached_at": now} for s in skus],
+            columns=[*columns, "raw_json", "cached_at"], dtype=object,
+        )
         if transaction:
             self.conn.execute("BEGIN TRANSACTION")
         self.conn.execute("DELETE FROM skus")
-        for s in skus:
-            self.conn.execute("""
-                INSERT INTO skus (
-                    sku_code, product_id, color, size, material, provider_id,
-                    size_id, color_id, color_hex, price, second_price, addition_price,
-                    provider_name, raw_json, cached_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                s.get("sku_code"), s.get("product_id"), s.get("color"),
-                s.get("size"), s.get("material"), s.get("provider_id"),
-                s.get("size_id"), s.get("color_id"), s.get("color_hex"),
-                s.get("price"), s.get("second_price"), s.get("addition_price"),
-                s.get("provider_name"), json.dumps(s.get("raw_json", {})), now
-            ))
+        if skus:
+            names = ", ".join(rows.columns)
+            self.conn.register("incoming_skus", rows)
+            try:
+                self.conn.execute(f"INSERT INTO skus ({names}) SELECT {names} FROM incoming_skus")
+            finally:
+                self.conn.unregister("incoming_skus")
         if transaction:
             self.conn.execute("COMMIT")
         logger.info(f"Seeded {len(skus)} SKUs into DuckDB")
