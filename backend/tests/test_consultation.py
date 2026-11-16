@@ -27,6 +27,13 @@ async def answer(message):
     return ''.join(json.loads(event).get('text', '') for event in events if event != '[DONE]')
 
 
+def test_definition_remains_localized_and_does_not_invent_products():
+    vi = asyncio.run(answer('Tôi mới bán, gross margin nghĩa là gì?'))
+    en = asyncio.run(answer('What is gross margin in print on demand?'))
+    assert 'Biên lợi nhuận gộp' in vi and '40%' in vi and 'gross margin' not in vi.lower() and 'SKU' not in vi
+    assert 'Gross margin' in en and '40%' in en
+
+
 def test_budget_hoodie_consultation_uses_catalog_prices_and_one_adult_recommendation(monkeypatch):
     monkeypatch.setattr(settings, 'DUCKDB_PATH', ':memory:')
     store = DuckDBStore()

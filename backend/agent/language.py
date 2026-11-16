@@ -20,7 +20,8 @@ ENGLISH_LABELS = re.compile(
 )
 UNTRANSLATED_VI_TERMS = re.compile(
     r'\b(?:budget[ -]friendly|beginner|recommendation|reasoning|trade[ -]off|base cost|'
-    r'best value|size range|adult sizing|shipping cost|premium feel)\b', re.IGNORECASE,
+    r'best value|size range|adult sizing|shipping cost|premium feel|gross margin|blank product|print.on.demand)\b',
+    re.IGNORECASE,
 )
 
 
@@ -49,6 +50,7 @@ def language_instruction(language: str) -> str:
     if language == 'vi':
         return ('Ngôn ngữ trả lời bắt buộc: viết toàn bộ bằng tiếng Việt, gồm tiêu đề, lý do và câu hỏi. '
                 'Dịch các từ như budget-friendly, beginner, Recommendation, Reasoning và Trade-off. '
+                'Dùng biên lợi nhuận gộp, sản phẩm phôi, giá gốc và in theo yêu cầu cho các thuật ngữ tương ứng. '
                 'Chỉ giữ tên sản phẩm, thương hiệu và mã SKU ở dạng gốc. Write the entire reply in Vietnamese.')
     return 'Required reply language: write entirely in English, including headings and follow-up questions.'
 

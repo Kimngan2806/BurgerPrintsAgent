@@ -7,7 +7,7 @@ from google.genai import errors as google_errors
 from core.config import settings
 from agent.domain_knowledge import build_domain_context
 from agent.language import language_instruction, matches_reply_language, reply_language
-from agent.recommendation import beginner_hoodie_question, hoodie_recommendation
+from agent.recommendation import beginner_hoodie_question, gross_margin_definition, hoodie_recommendation
 from core.session import session_manager
 from agent.byteplus_agent import BytePlusChatSession
 from agent.openrouter_agent import OpenRouterChatSession
@@ -119,6 +119,11 @@ async def process_chat(session_id: str, message: str):
     else:
         model_context = ''
     language = reply_language(message, prior_messages)
+    definition = gross_margin_definition(message, language)
+    if definition:
+        yield {'data': json.dumps({'text': definition})}
+        yield {'data': '[DONE]'}
+        return
     if beginner_hoodie_question(message):
         result = await execute_tool('search_products', {
             'query': 'hoodie', 'prefer_budget': True, 'adult_only': True, 'single_recommendation': True,

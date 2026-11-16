@@ -3,11 +3,15 @@ import unicodedata
 from decimal import Decimal
 
 
-def beginner_hoodie_question(message: str) -> bool:
-    """Recognize general advice; let the model handle extra shopping constraints."""
+def _plain_words(message: str) -> str:
     plain = ''.join(ch for ch in unicodedata.normalize('NFD', message.casefold())
                     if unicodedata.category(ch) != 'Mn').replace('đ', 'd')
-    plain = ' '.join(re.sub(r'[^a-z0-9]+', ' ', plain).split())
+    return ' '.join(re.sub(r'[^a-z0-9]+', ' ', plain).split())
+
+
+def beginner_hoodie_question(message: str) -> bool:
+    """Recognize general advice; let the model handle extra shopping constraints."""
+    plain = _plain_words(message)
     budget = r'(?:budget friendly|affordable|low cost|gia re|gia mem|tiet kiem)'
     hoodie = r'(?:hoodie|hoodies|ao hoodie|ao ni co mu)'
     beginner = r'(?:beginner|beginners|a beginner|nguoi moi(?: bat dau)?)'
@@ -17,6 +21,23 @@ def beginner_hoodie_question(message: str) -> bool:
         rf'{budget} {hoodie} for {beginner}',
         plain,
     ))
+
+
+def gross_margin_definition(message: str, language: str) -> str | None:
+    plain = _plain_words(message)
+    if not re.fullmatch(
+        r'(?:toi moi ban )?(?:gross margin|bien loi nhuan gop) (?:nghia )?la gi(?: trong (?:pod|in theo yeu cau))?|'
+        r'what is gross margin(?: in (?:pod|print on demand))?', plain,
+    ):
+        return None
+    if language == 'vi':
+        return ('**Biên lợi nhuận gộp** là phần trăm doanh thu còn lại sau khi trừ giá vốn hàng bán. '
+                'Ví dụ, nếu bạn bán một áo với giá 25 USD và giá vốn là 15 USD, '
+                'bạn còn 10 USD lợi nhuận gộp, tương đương **40%** giá bán. '
+                'Khi tính cho cửa hàng, hãy dùng các chi phí trực tiếp thực tế của đơn để xác định giá vốn.')
+    return ('**Gross margin** is the percentage of revenue left after direct costs. '
+            'For example, a shirt that sells for $25 and has $15 in direct costs leaves $10 in gross profit, '
+            'or a **40% gross margin**. Use your actual direct costs when calculating it for your store.')
 
 
 def hoodie_recommendation(result: dict, language: str) -> str:
