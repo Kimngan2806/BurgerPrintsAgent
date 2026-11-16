@@ -76,9 +76,9 @@ class OpenAICompatibleChatSession:
         ]
         self.pending_assistant_message: Dict[str, Any] | None = None
 
-    async def send_user_message(self, content: str) -> Dict[str, Any]:
+    async def send_user_message(self, content: str, *, allow_tools: bool = True) -> Dict[str, Any]:
         self.messages.append({"role": "user", "content": content})
-        return await self._complete()
+        return await self._complete(allow_tools=allow_tools)
 
     async def send_tool_results(
         self, calls: List[Dict[str, Any]], results: List[Dict[str, Any]], *, allow_tools: bool = True

@@ -1,5 +1,6 @@
 import json
 import re
+from decimal import Decimal, InvalidOperation
 
 from api.burgerprints import BurgerPrintsClient
 from api.models import OrderAddress, OrderRequest
@@ -116,6 +117,7 @@ async def search_products(args: dict) -> dict:
     material = args.get("material")
     color = (args.get("color") or "").strip()
     size = (args.get("size") or "").strip()
+    prefer_budget = args.get('prefer_budget') is True
     if color.casefold() in {"trắng", "trang"}:
         color = "White"
     if category.casefold() in {"áo thun", "ao thun", "áo phông", "ao phong", "tee", "t shirt", "tshirt"}:
@@ -128,18 +130,21 @@ async def search_products(args: dict) -> dict:
     if query.casefold() in {"áo thun", "ao thun", "áo phông", "ao phong", "t shirt", "tshirt"}:
         query = "t-shirt"
 
-    if query and hybrid_searcher.is_ready and not (color or size):
+    if query and hybrid_searcher.is_ready and not (color or size or prefer_budget):
         results = db_store.query_products_by_ids(hybrid_searcher.search(query, top_k=15))
         if category:
             results = [item for item in results if category.lower() in item.get("category", "").lower()]
         if material:
             results = [item for item in results if material.lower() in item.get("material", "").lower()]
-    elif query or color or size:
-        results = db_store.search_products_text(query, category, material, color=color, size=size)
+    elif query or color or size or prefer_budget:
+        results = db_store.search_products_text(
+            query, category, material, limit=None if prefer_budget else 15, color=color, size=size,
+        )
     else:
         results = db_store.query_products(category=category, material=material, limit=15)
     max_price = args.get('max_price')
     choices = []
+    budget_choices = []
     for item in results:
         variants = db_store.get_skus_for_product(item['id'])
         variants = [v for v in variants if (not color or (v.get('color') or '').strip().casefold() == color.casefold())
@@ -148,21 +153,42 @@ async def search_products(args: dict) -> dict:
             variants = [v for v in variants if v.get('price') is not None and _price_at_most(v['price'], max_price)]
         if (color or size or max_price is not None) and not variants:
             continue
-        choices.append({**slim_product(item), 'variants': [slim_sku(v) for v in variants[:50]], 'variant_count': len(variants),
-                        'availability': 'not_checked', 'currency': 'USD'})
-        if len(choices) == 3:
+        if prefer_budget:
+            children = bool(re.search(r'\b(?:kids?|youth|child(?:ren)?|toddler|baby|infant|boys?|girls?)\b',
+                                      item.get('name') or '', re.I))
+            if children and args.get('adult_only') is True:
+                continue
+            known_prices = [(price, v) for v in variants if (price := _catalog_price(v.get('price'))) is not None and price > 0]
+            if not known_prices:
+                continue
+            cheapest, variant = min(known_prices, key=lambda entry: (entry[0], entry[1]['sku_code']))
+            variants = [variant] + [v for v in variants if v['sku_code'] != variant['sku_code']]
+        choice = {**slim_product(item), 'variants': [slim_sku(v) for v in variants[:50]], 'variant_count': len(variants),
+                  'availability': 'not_checked', 'currency': 'USD'}
+        if prefer_budget:
+            budget_choices.append((children, cheapest, choice))
+        else:
+            choices.append(choice)
+        if not prefer_budget and len(choices) == 3:
             break
+    if prefer_budget:
+        count = 1 if args.get('single_recommendation') is True else 3
+        choices = [item for _, _, item in sorted(budget_choices, key=lambda entry: entry[:2])[:count]]
     return {'results': choices, 'scope': 'Matching products within the searched catalog candidates',
             'note': 'No match: ask which one condition to relax; never change constraints automatically.'}
 
 
-def _price_at_most(value, maximum):
-    from decimal import Decimal, InvalidOperation
+def _catalog_price(value):
     try:
-        price, limit = Decimal(str(value)), Decimal(str(maximum))
-        return price.is_finite() and limit.is_finite() and price >= 0 and price <= limit
+        price = Decimal(str(value))
+        return price if price.is_finite() and price >= 0 else None
     except InvalidOperation:
-        return False
+        return None
+
+
+def _price_at_most(value, maximum):
+    price, limit = _catalog_price(value), _catalog_price(maximum)
+    return price is not None and limit is not None and price <= limit
 
 
 async def get_sku_info(args: dict) -> dict:

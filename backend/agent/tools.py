@@ -13,17 +13,18 @@ search_products_func = FunctionDeclaration(
             'color': {'type': 'string', 'description': 'Exact color from user requirements.'},
             'size': {'type': 'string', 'description': 'Exact size from user requirements.'},
             'max_price': {'type': 'number', 'description': 'Maximum known catalog base price in USD, not total landed cost.'},
+            'prefer_budget': {'type': 'boolean', 'description': 'Rank by known catalog prices when asked for a low-cost recommendation. Use specific search terms for explicitly requested audiences, such as kids.'},
             "query": {
                 "type": "string",
-                "description": "CÃ¢u query tÃ¬m kiáº¿m tá»± do (vÃ­ dá»¥: 'Ã¡o thun cotton mÃ¹a hÃ¨', 'premium mug')"
+                "description": "Tên sản phẩm hoặc từ khóa catalog, ví dụ 'hoodie', 't-shirt', 'kid hoodie'. Không đưa mô tả mục tiêu như 'người mới' vào từ khóa."
             },
             "category": {
                 "type": "string",
-                "description": "Danh má»¥c sáº£n pháº©m (vÃ­ dá»¥: 't-shirt', 'polo', 'hoodie', 'mug', 'poster', 'tote')"
+                "description": "Danh mục sản phẩm, ví dụ 't-shirt', 'polo', 'hoodie', 'mug', 'poster', 'tote'."
             },
             "material": {
                 "type": "string",
-                "description": "Cháº¥t liá»‡u (vÃ­ dá»¥: 'cotton', 'polyester', 'ceramic')"
+                "description": "Chất liệu, ví dụ 'cotton', 'polyester', 'ceramic'."
             }
         }
     }

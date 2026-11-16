@@ -297,7 +297,7 @@ class DuckDBStore:
         return results
 
     def search_products_text(
-        self, query_text: str = None, category: str = None, material: str = None, limit: int = 15,
+        self, query_text: str = None, category: str = None, material: str = None, limit: int | None = 15,
         *, color: str = None, size: str = None,
     ) -> List[Dict]:
         """Fast DuckDB text search over stable catalog fields."""
@@ -351,8 +351,10 @@ class DuckDBStore:
                 params.append(size)
             query += ")"
 
-        query += " ORDER BY score DESC, name LIMIT ?"
-        params.append(limit)
+        query += " ORDER BY score DESC, name"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
 
         df = self.conn.execute(query, params).fetchdf()
         results = []
