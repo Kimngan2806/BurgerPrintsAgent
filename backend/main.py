@@ -11,7 +11,7 @@ load_dotenv()
 
 from core.config import settings
 from cache.duckdb_store import db_store
-from cache.sync import sync_catalog_to_cache
+from cache import sync as catalog_sync
 from search.hybrid_search import hybrid_searcher
 from core.feature_flags import ff_manager
 from routers.chat import router as chat_router
@@ -35,16 +35,23 @@ async def lifespan(app: FastAPI):
     # Init cache và search index khi khởi động
     if settings.CACHE_SYNC_ON_STARTUP:
         rebuild_fn = hybrid_searcher.build_index if settings.BUILD_SEARCH_INDEX_ON_STARTUP else None
-        await sync_catalog_to_cache(rebuild_search_index_fn=rebuild_fn)
+        await catalog_sync.sync_catalog_to_cache(rebuild_search_index_fn=rebuild_fn)
     elif settings.BUILD_SEARCH_INDEX_ON_STARTUP:
         hybrid_searcher.build_index(db_store.get_all_products_raw())
     else:
         logger.info("Fast startup enabled: using DuckDB catalog without startup sync/vector index.")
         
     async def scheduled_sync():
+        interval = max(60, settings.CATALOG_SYNC_INTERVAL_SECONDS)
+        retry_delay = 30
         while True:
-            await asyncio.sleep(max(60, settings.CATALOG_SYNC_INTERVAL_SECONDS))
-            await sync_catalog_to_cache()
+            if settings.BURGERPRINTS_API_KEY and not db_store.has_catalog():
+                await asyncio.sleep(min(interval, retry_delay))
+                retry_delay = min(retry_delay * 2, 600)
+            else:
+                await asyncio.sleep(interval)
+                retry_delay = 30
+            await catalog_sync.sync_catalog_to_cache()
     sync_task = asyncio.create_task(scheduled_sync()) if settings.CATALOG_SYNC_INTERVAL_SECONDS > 0 else None
     try:
         yield
@@ -87,6 +94,7 @@ async def health_check():
         "status": "ok", 
         "search_ready": True,
         "catalog_ready": db_store.has_catalog(),
+        "catalog_sync_status": catalog_sync.catalog_sync_status,
         "vector_search_ready": hybrid_searcher.is_ready,
         "harness_active": ff_manager.is_active()
     }
