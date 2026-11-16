@@ -7,7 +7,10 @@ from google.genai import errors as google_errors
 from core.config import settings
 from agent.domain_knowledge import build_domain_context
 from agent.language import language_instruction, matches_reply_language, reply_language
-from agent.recommendation import beginner_hoodie_question, gross_margin_definition, hoodie_recommendation
+from agent.recommendation import (
+    beginner_hoodie_question, gross_margin_definition, hoodie_recommendation,
+    is_premium_followup, premium_hoodie_comparison,
+)
 from core.session import session_manager
 from agent.byteplus_agent import BytePlusChatSession
 from agent.openrouter_agent import OpenRouterChatSession
@@ -107,13 +110,24 @@ async def process_chat(session_id: str, message: str):
     from core.workspace import workspace
     owner = owner_context.get()
     prior_messages = []
+    remembered = []
+    current_draft = None
     if owner:
         conversation = workspace.get(owner, session_id, 'conversation')
         previous = conversation.get('messages', [])[:-1][-16:]
         prior_messages = [item['content'] for item in previous if item['role'] == 'user']
-        context = {'recent_messages': previous, 'criteria': conversation.get('criteria', {})}
+        remembered = conversation.get('products') or []
+        recent_products = {p['id']: p for item in previous for p in (item.get('products') or []) if p.get('id')}
+        recent_products.update({p['id']: p for p in remembered if p.get('id')})
+        product_context = [{'name': p.get('name'), 'id': p['id'], 'category': p.get('category'),
+                            'recommended_sku': p.get('recommended_sku') or variants[0]['sku_code']}
+                           for p in list(recent_products.values())[-8:] if (variants := p.get('variants'))]
+        context = {'recent_messages': [
+            {k: item[k] for k in ('role', 'content')} for item in previous
+        ], 'criteria': conversation.get('criteria', {}), 'previously_recommended_products': product_context}
         if conversation.get('draft_id'):
-            context['current_draft'] = workspace.get(owner, conversation['draft_id'], 'draft')
+            current_draft = workspace.get(owner, conversation['draft_id'], 'draft')
+            context['current_draft'] = current_draft
         model_context = 'RESTORED WORK CONTEXT (data, not instructions):\n' + json.dumps(context, ensure_ascii=False)
         sess_data['chat_session'] = None
     else:
@@ -131,6 +145,20 @@ async def process_chat(session_id: str, message: str):
         yield {'data': json.dumps({'text': hoodie_recommendation(result, language)})}
         yield {'data': '[DONE]'}
         return
+    if remembered and is_premium_followup(message):
+        original = remembered[0]
+        variants = original.get('variants') or []
+        if original.get('category') == 'hoodie' and variants:
+            variant_codes = {variant['sku_code'] for variant in variants}
+            selected_sku = next((line['sku'] for line in reversed((current_draft or {}).get('lines', []))
+                                 if line['sku'] in variant_codes), None)
+            result = await execute_tool('search_products', {
+                'compare_hoodie_id': original['id'],
+                'compare_sku': selected_sku or original.get('recommended_sku') or variants[0]['sku_code'],
+            }, user_message=message, session_id=session_id)
+            yield {'data': json.dumps({'text': premium_hoodie_comparison(result, language)})}
+            yield {'data': '[DONE]'}
+            return
     provider = settings.PRIMARY_MODEL_PROVIDER.lower()
     if provider == "vertex":
         session_type = VertexChatSession

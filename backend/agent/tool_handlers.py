@@ -12,6 +12,7 @@ from search.hybrid_search import hybrid_searcher
 
 
 bp_client = BurgerPrintsClient()
+YOUTH_PRODUCT = re.compile(r'\b(?:kids?|youth|child(?:ren)?|toddler|baby|infant|boys?|girls?)\b', re.I)
 
 
 def slim_product(product: dict) -> dict:
@@ -111,6 +112,8 @@ async def search_products(args: dict) -> dict:
     if not db_store.has_catalog():
         return {"results": [], "code": "CATALOG_UNAVAILABLE",
                 "note": "Catalog chưa có dữ liệu đồng bộ. Không thể kết luận có hay không có sản phẩm khớp."}
+    if args.get('compare_hoodie_id'):
+        return _compare_premium_hoodie(args['compare_hoodie_id'], args.get('compare_sku'))
 
     query = (args.get("query") or "").strip()
     category = (args.get("category") or "").strip()
@@ -154,17 +157,16 @@ async def search_products(args: dict) -> dict:
         if (color or size or max_price is not None) and not variants:
             continue
         if prefer_budget:
-            children = bool(re.search(r'\b(?:kids?|youth|child(?:ren)?|toddler|baby|infant|boys?|girls?)\b',
-                                      item.get('name') or '', re.I))
+            children = bool(YOUTH_PRODUCT.search(item.get('name') or ''))
             if children and args.get('adult_only') is True:
                 continue
             known_prices = [(price, v) for v in variants if (price := _catalog_price(v.get('price'))) is not None and price > 0]
             if not known_prices:
                 continue
             cheapest, variant = min(known_prices, key=lambda entry: (entry[0], entry[1]['sku_code']))
-            variants = [variant] + [v for v in variants if v['sku_code'] != variant['sku_code']]
-        choice = {**slim_product(item), 'variants': [slim_sku(v) for v in variants[:50]], 'variant_count': len(variants),
-                  'availability': 'not_checked', 'currency': 'USD'}
+            choice = _product_choice(item, variants, variant)
+        else:
+            choice = _product_choice(item, variants)
         if prefer_budget:
             budget_choices.append((children, cheapest, choice))
         else:
@@ -176,6 +178,45 @@ async def search_products(args: dict) -> dict:
         choices = [item for _, _, item in sorted(budget_choices, key=lambda entry: entry[:2])[:count]]
     return {'results': choices, 'scope': 'Matching products within the searched catalog candidates',
             'note': 'No match: ask which one condition to relax; never change constraints automatically.'}
+
+
+def _product_choice(product, variants, recommended=None):
+    if recommended:
+        variants = [recommended, *(v for v in variants if v['sku_code'] != recommended['sku_code'])]
+    entry = {**slim_product(product), 'variants': [slim_sku(v) for v in variants[:50]],
+             'variant_count': len(variants), 'availability': 'not_checked', 'currency': 'USD'}
+    if recommended:
+        entry['recommended_sku'] = recommended['sku_code']
+    return entry
+
+
+def _compare_premium_hoodie(product_id, sku_code):
+    original = db_store.get_product_by_id(product_id)
+    if not original or original.get('category') != 'hoodie':
+        return {'results': []}
+    original_variants = db_store.get_skus_for_product(product_id)
+    original_sku = next((v for v in original_variants if v['sku_code'] == sku_code), None)
+    base_price = _catalog_price(original_sku['price']) if original_sku else None
+    if base_price is None or base_price <= 0:
+        return {'results': []}
+
+    ranked = []
+    for candidate in db_store.search_products_text('hoodie premium', category='hoodie', limit=None):
+        name = candidate.get('name') or ''
+        if (candidate['id'] == product_id or not re.search(r'\bpremium\b', name, re.I)
+                or YOUTH_PRODUCT.search(name)):
+            continue
+        variants = db_store.get_skus_for_product(candidate['id'])
+        prices = [(price, v['sku_code'], v) for v in variants
+                  if (price := _catalog_price(v.get('price'))) is not None and price > base_price]
+        if prices:
+            price, _, variant = min(prices, key=lambda row: row[:2])
+            same_style = ('zip' in name.casefold()) == ('zip' in original['name'].casefold())
+            ranked.append((not same_style, price, candidate['id'], _product_choice(candidate, variants, variant)))
+    if not ranked:
+        return {'results': []}
+    premium = min(ranked, key=lambda row: row[:3])[3]
+    return {'results': [_product_choice(original, original_variants, original_sku), premium]}
 
 
 def _catalog_price(value):

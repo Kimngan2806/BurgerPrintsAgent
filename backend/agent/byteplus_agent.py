@@ -129,8 +129,7 @@ class OpenAICompatibleChatSession:
                 headers=headers,
                 json=payload,
             )
-            response.raise_for_status()
-            data = response.json()
+            data = self._read_completion(response)
 
         message = data["choices"][0]["message"]
         tool_calls = message.get("tool_calls") or []
@@ -150,6 +149,10 @@ class OpenAICompatibleChatSession:
             "usage": data.get("usage") or {},
             "model": data.get("model") or self.model,
         }
+
+    def _read_completion(self, response: httpx.Response) -> Dict[str, Any]:
+        response.raise_for_status()
+        return response.json()
 
 
 class BytePlusChatSession(OpenAICompatibleChatSession):

@@ -93,12 +93,23 @@ async def stream(owner, request, lease):
             body = {k: v for k, v in conversation.items() if k not in {'id', 'version', 'updated_at'}}
             if review_changed:
                 body['chat_order_review'] = chat_review
-            for event in tool_events.get() or []:
-                if event['tool'] == 'search_products':
-                    body['criteria'] = event.get('criteria', {})
-                    body['products'] = event['result'].get('results', [])
-            body['messages'].append({'id': secrets.token_hex(8), 'role': 'agent',
-                'content': content or 'Đã dừng trả lời. Đơn hàng không bị hủy.', 'interrupted': failed})
+            reply = {'id': secrets.token_hex(8), 'role': 'agent',
+                     'content': content or 'Đã dừng trả lời. Đơn hàng không bị hủy.', 'interrupted': failed}
+            if not failed:
+                for event in tool_events.get() or []:
+                    result = event['result']
+                    if event['tool'] == 'search_products':
+                        body['criteria'] = event.get('criteria', {})
+                        products = result.get('results') or []
+                    elif event['tool'] == 'get_sku_info' and result.get('ok') and result.get('sku') and result.get('product'):
+                        products = [{**result['product'], 'image_url': result.get('product_image_url'),
+                                     'variants': [result['sku']]}]
+                    else:
+                        continue
+                    if products:
+                        reply['products'] = products
+                        body['products'] = products
+            body['messages'].append(reply)
             workspace.update(owner, request.session_id, 'conversation', conversation['version'], body)
             workspace.event(owner, 'chat_error' if failed else 'chat_completed', request.session_id)
         finally:

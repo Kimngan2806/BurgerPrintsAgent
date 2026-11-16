@@ -7,6 +7,7 @@ import pytest
 from agent import gemini_agent, tool_handlers
 from agent.language import reply_language
 from cache.duckdb_store import DuckDBStore
+from core.chat_context import owner_context
 from core.config import settings
 
 
@@ -79,3 +80,44 @@ def test_openrouter_rewrites_untranslated_content_before_streaming(monkeypatch):
     result = asyncio.run(answer('Mẫu nào hợp để bán trước?'))
     assert result == 'Mình đề xuất mẫu này. Điểm đánh đổi là giá cao hơn.'
     assert len(requests) == 2
+
+
+def test_premium_followup_compares_remembered_sku_without_calling_model(tmp_path, monkeypatch):
+    from core import workspace as workspace_module
+
+    monkeypatch.setattr(settings, 'DUCKDB_PATH', ':memory:')
+    store = DuckDBStore()
+    monkeypatch.setattr(tool_handlers, 'db_store', store)
+    workspace = workspace_module.Workspace(tmp_path / 'chat.db')
+    monkeypatch.setattr(workspace_module, 'workspace', workspace)
+    owner = workspace.register('seller', 'fixture-only-password')
+    message = 'hãy so sánh với một lựa chọn premium hơn'
+    conversation = workspace.create(owner, 'conversation', {'messages': [
+        {'role': 'user', 'content': 'Có hoodie nào budget-friendly cho beginner không?'},
+        {'role': 'agent', 'content': 'Mình chọn mẫu Gildan.'},
+        {'role': 'user', 'content': message},
+    ], 'products': [{'id': 'BASE', 'name': 'Gildan 18500', 'category': 'hoodie',
+                     'variants': [{'sku_code': 'BASE-M'}]}]})
+    token = owner_context.set(owner)
+    try:
+        store.replace_snapshot([
+            {'id': 'BASE', 'name': 'Gildan 18500 Hoodie', 'category': 'hoodie'},
+            {'id': 'PREMIUM', 'name': 'AOP Premium Hoodie', 'category': 'hoodie'},
+            {'id': 'KIDS', 'name': 'Kids Premium Hoodie', 'category': 'hoodie'},
+        ], [
+            {'sku_code': 'BASE-M', 'product_id': 'BASE', 'price': '11.5'},
+            {'sku_code': 'PREMIUM-M', 'product_id': 'PREMIUM', 'price': '26'},
+            {'sku_code': 'KIDS-M', 'product_id': 'KIDS', 'price': '15'},
+        ], [])
+
+        async def run():
+            return [json.loads(e['data'])['text'] async for e in gemini_agent.process_chat(conversation['id'], message)
+                    if e['data'] != '[DONE]']
+
+        text = ''.join(asyncio.run(run()))
+        assert all(f'**{heading}**' in text for heading in ('Đề xuất', 'Lý do', 'Điểm đánh đổi'))
+        assert 'BASE-M' in text and 'PREMIUM-M' in text and '26,00' in text
+        assert 'Kids Premium Hoodie' not in text
+    finally:
+        owner_context.reset(token)
+        store.close()

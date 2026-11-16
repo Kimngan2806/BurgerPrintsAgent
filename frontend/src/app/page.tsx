@@ -6,14 +6,14 @@ import MessageBubble from '@/components/MessageBubble';
 import StreamingIndicator from '@/components/StreamingIndicator';
 import {getApiBaseUrl} from '@/lib/api';
 
-type Message = {id: string; role: 'user' | 'agent'; content: string};
-type Conversation = {id: string; title: string; messages: Message[]; products?: Product[]; draft_id?: string};
+type Message = {id: string; role: 'user' | 'agent'; content: string; products?: Product[]};
+type Conversation = {id: string; title: string; messages: Message[]; draft_id?: string};
 type Line = {sku: string; quantity: number; asset_id: string; position: string};
 type Address = {name: string; street: string; city: string; state: string; zip: string; country: string; email?: string; phone?: string};
 type Draft = {id: string; version: number; lines: Line[]; address: Address; acknowledge_unverified_print: boolean};
 type Asset = {id: string; version: number; name: string; tags: string; file_version: number; sha256: string; validation: {width: number; height: number; message: string}};
 type Variant = {sku_code: string; color?: string; size?: string; provider_name?: string; price?: string};
-type Product = {id: string; name: string; image_url?: string; variants?: Variant[]; catalog_updated_at?: number; attribute_note?: string};
+type Product = {id: string; name: string; image_url?: string; variants?: Variant[]; recommended_sku?: string; catalog_updated_at?: number; attribute_note?: string};
 type Order = {reference: string; state: string; result: Record<string, unknown>; updated_at?: number};
 type Review = {id: string; draft_version: number; summary: {store: string; sandbox: boolean; lines: (Line & {product_name: string; color: string; size: string; catalog_price: string | null; file: {name: string; sha256: string}; availability: {status: string}})[]; address: Address; cost_note: string; unknown_costs: string[]; transaction_notice: string}};
 type View = 'chat' | 'search' | 'draft' | 'designs' | 'orders' | 'support' | 'profit';
@@ -44,7 +44,8 @@ function OrderDetails({result}: {result: Record<string, unknown>}) {
 }
 
 function ProductCard({product, onAdd}: {product: Product; onAdd: (sku: string) => void}) {
-  const [selected, setSelected] = useState('');
+  const [selected, setSelected] = useState(() =>
+    product.variants?.some(v => v.sku_code === product.recommended_sku) ? product.recommended_sku! : '');
   const variant = product.variants?.find(v => v.sku_code === selected);
   return <article className="product-card">
     {product.image_url ? <img src={product.image_url} alt={product.name} onError={e => {e.currentTarget.style.display = 'none';}} /> : <div className="image-placeholder"><Package />Chưa có ảnh sản phẩm</div>}
@@ -67,6 +68,7 @@ export default function WorkspacePage() {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const listScope = useRef(0);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -85,7 +87,7 @@ export default function WorkspacePage() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [assetQuery, setAssetQuery] = useState('');
   const [previousAsset, setPreviousAsset] = useState('');
-  const [products, setProducts] = useState<Product[]>([]);
+  const [searchProducts, setSearchProducts] = useState<Product[]>([]);
   const [searched, setSearched] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [supports, setSupports] = useState<{id: string; message: string; note: string}[]>([]);
@@ -93,10 +95,22 @@ export default function WorkspacePage() {
   const [metrics, setMetrics] = useState<{name: string; count: number}[]>([]);
 
   async function refreshLists() {
+    const scope = listScope.current;
     const [c, d, a, o, s, m] = await Promise.all([
       api<Conversation[]>('/work/conversation'), api<Draft[]>('/work/draft'), api<Asset[]>('/work/asset'),
       api<Order[]>('/orders'), api<typeof supports>('/work/support'), api<{events: typeof metrics}>('/metrics')]);
-    setConversations(c); setDrafts(d); setAssets(a); setOrders(o); setSupports(s); setMetrics(m.events);
+    if (scope === listScope.current) {
+      setConversations(c); setDrafts(d); setAssets(a); setOrders(o); setSupports(s); setMetrics(m.events);
+    }
+  }
+
+  async function logOut() {
+    await api('/logout', 'POST');
+    listScope.current += 1;
+    setUser(null); setConversation(null); setConversations([]); setMessages([]); setInput('');
+    setDraft(null); draftRef.current = null; setDrafts([]); setAssets([]); setReview(null); setPanel(false);
+    setSearchProducts([]); setSearched(false); setOrders([]); setSupports([]); setMetrics([]); setCalculation(null);
+    setView('chat');
   }
   useEffect(() => {
     api<typeof user>('/me').then(setUser).catch(() => {}).finally(() => setReady(true));
@@ -153,7 +167,7 @@ export default function WorkspacePage() {
   async function openConversation(ident: string) {
     if (dirty) await saveDraft();
     const next = await api<Conversation>(`/conversations/${ident}`);
-    setConversation(next); setMessages(next.messages); setProducts(next.products || []); setView('chat'); setSidebar(false);
+    setConversation(next); setMessages(next.messages); setView('chat'); setSidebar(false);
     if (next.draft_id) await openDraft(next.draft_id, false);
     else {setDraft(null); draftRef.current = null; setPanel(false); setReview(null);}
     nearBottom.current = true;
@@ -181,18 +195,14 @@ export default function WorkspacePage() {
           if (!value) continue;
           if (value === '[DONE]') {ended = true; break;}
           const data = JSON.parse(value);
-          if (data.type === 'tool_result') {
-            if (data.tool === 'search_products') setProducts(data.result.results || []);
-            if (data.tool === 'get_sku_info' && data.result.ok) setProducts([{...data.result.product, image_url: data.result.product_image_url, variants: [data.result.sku]}]);
-            continue;
-          }
+          if (data.type === 'tool_result') continue;
           answer += data.text || (data.error ? `\n\n${data.error}` : '');
           setMessages(prev => prev.map(m => m.id === agentId ? {...m, content: answer} : m));
         }
       }
       if (!ended) throw new Error('Kết nối phản hồi bị ngắt. Mở lại lịch sử để kiểm tra phần đã lưu.');
       const updated = await api<Conversation>(`/conversations/${active.id}`);
-      setConversation(updated);
+      setConversation(updated); setMessages(updated.messages);
       if (updated.draft_id) {
         const next = await api<Draft>(`/drafts/${updated.draft_id}`); draftRef.current = next; setDraft(next); setDirty(false); setReview(null); setPanel(true);
       }
@@ -231,12 +241,12 @@ export default function WorkspacePage() {
     {sidebar && <button className="sidebar-scrim" aria-label="Đóng điều hướng" onClick={() => setSidebar(false)} />}
     <aside className={`workspace-nav ${sidebar ? 'is-open' : ''}`}>
       <img className="brand-logo" src="/burgerprint-logo.svg" alt="BurgerPrints" />
-      <button className="primary" disabled={loading || busy || dirty} onClick={() => {setConversation(null); setMessages([]); setProducts([]); setDraft(null); draftRef.current = null; setReview(null); setView('chat'); setPanel(false); setSidebar(false);}}><Plus size={18} />Chat mới</button>
+      <button className="primary" disabled={loading || busy || dirty} onClick={() => {setConversation(null); setMessages([]); setDraft(null); draftRef.current = null; setReview(null); setView('chat'); setPanel(false); setSidebar(false);}}><Plus size={18} />Chat mới</button>
       <nav aria-label="Chức năng">{navigation.map(([key, label, icon]) => <button key={key} aria-current={view === key ? 'page' : undefined} onClick={() => navigate(key)}>{icon}{label}</button>)}</nav>
       <p className="nav-caption">Lịch sử của bạn</p><div className="history-list">{conversations.map(c => <button key={c.id} disabled={loading || busy} onClick={() => run(() => openConversation(c.id))}>{c.title}</button>)}{!conversations.length && <p className="muted">Chưa có hội thoại</p>}</div>
       <div className="nav-footer"><p>{user.name}</p><small>{user.store}</small><span className="demo-label">{user.sandbox ? 'Sandbox' : 'Đơn thật'} · Demo một store</span>
         <button onClick={() => {const next = !dark; setDark(next); localStorage.setItem('theme', next ? 'dark' : 'light'); document.documentElement.setAttribute('data-theme', next ? 'dark' : 'light');}}>{dark ? <Sun size={16} /> : <Moon size={16} />}{dark ? 'Giao diện sáng' : 'Giao diện tối'}</button>
-        <button disabled={loading || saving || dirty} onClick={() => run(async () => {await api('/logout', 'POST'); setUser(null); setConversation(null); setMessages([]); setDraft(null); draftRef.current = null; setProducts([]);})}><LogOut size={16} />Đăng xuất</button>
+        <button disabled={loading || saving || dirty} onClick={() => run(logOut)}><LogOut size={16} />Đăng xuất</button>
       </div>
     </aside>
     <main className="workspace-main">
@@ -250,14 +260,18 @@ export default function WorkspacePage() {
             <div className="entry-grid">{[['search', 'Tìm sản phẩm', 'Lọc và chọn biến thể từ catalog'], ['draft', 'Tạo đơn từ SKU', 'Dùng mã chính xác bạn đã có'], ['designs', 'Mở thiết kế', 'Tải file, URL hoặc dùng thư viện'], ['orders', 'Tra cứu đơn', 'Trạng thái nguồn và tracking']].map(([key, title, subtitle]) => <button key={key} onClick={() => navigate(key as View)}><strong>{title}</strong><span>{subtitle}</span></button>)}</div>
             {!!drafts.length && <button className="resume-draft" onClick={() => run(async () => {await openDraft(drafts[0].id); setView('draft');})}>Tiếp tục đơn nháp gần nhất · {drafts[0].lines.length} dòng sản phẩm →</button>}
           </section>}
-          {messages.map(m => <MessageBubble key={m.id} role={m.role} content={m.content} />)}
+          {messages.map(m => <React.Fragment key={m.id}>
+            <MessageBubble role={m.role} content={m.content} />
+            {m.role === 'agent' && !!m.products?.length && <div className="product-grid">
+              {m.products.map(p => <ProductCard key={p.id} product={p} onAdd={sku => run(() => addSku(sku))} />)}
+            </div>}
+          </React.Fragment>)}
           {loading && <StreamingIndicator />}
-          {!!products.length && <div className="product-grid">{products.map(p => <ProductCard key={p.id} product={p} onAdd={sku => run(() => addSku(sku))} />)}</div>}
           <div ref={bottom} />
         </div>
         <form className="workspace-composer" onSubmit={e => {e.preventDefault(); send();}}><div><input aria-label="Tin nhắn" value={input} onChange={e => setInput(e.target.value)} placeholder="Tìm áo thun, so sánh SKU hoặc sửa đơn nháp…" maxLength={10000} disabled={loading} />{loading ? <button type="button" onClick={() => abort.current?.abort()} aria-label="Dừng trả lời, không hủy đơn"><Square size={16} />Dừng trả lời</button> : <button className="primary" disabled={!input.trim() || busy || saving}><Send size={16} />Gửi</button>}</div><small>Kiểm tra dữ liệu và bản duyệt trước khi xác nhận đơn.</small></form>
       </> : <div className="workspace-content">
-        {view === 'search' && <><h1>Tìm sản phẩm phù hợp</h1><p className="muted">Chọn đúng tổ hợp màu và size trước khi xem giá SKU. Tối đa ba lựa chọn mỗi lần.</p><form className="filter-form" onSubmit={e => {e.preventDefault(); const data = new FormData(e.currentTarget); const query = new URLSearchParams(); data.forEach((v, k) => {if (v) query.set(k, String(v));}); run(async () => {const result = await api<{results: Product[]}>(`/products?${query}`); setProducts(result.results); setSearched(true);});}}><label>Sản phẩm hoặc SKU<input name="q" placeholder="T-shirt hoặc mã SKU đầy đủ" /></label><label>Màu<input name="color" placeholder="Black" /></label><label>Size<input name="size" placeholder="M" /></label><label>Giá catalog tối đa (USD)<input name="max_price" type="number" min="0" step=".01" /></label><button className="primary" disabled={busy}>Tìm sản phẩm</button></form><div className="product-grid">{products.map(p => <ProductCard key={p.id} product={p} onAdd={sku => run(() => addSku(sku))} />)}</div>{searched && !products.length && <div className="empty-state">Chưa có kết quả trong catalog hiện tại. Thử nới một điều kiện màu, size hoặc giá; nếu catalog trống, cần cấu hình API và đồng bộ.</div>}</>}
+        {view === 'search' && <><h1>Tìm sản phẩm phù hợp</h1><p className="muted">Chọn đúng tổ hợp màu và size trước khi xem giá SKU. Tối đa ba lựa chọn mỗi lần.</p><form className="filter-form" onSubmit={e => {e.preventDefault(); const data = new FormData(e.currentTarget); const query = new URLSearchParams(); data.forEach((v, k) => {if (v) query.set(k, String(v));}); run(async () => {const result = await api<{results: Product[]}>(`/products?${query}`); setSearchProducts(result.results); setSearched(true);});}}><label>Sản phẩm hoặc SKU<input name="q" placeholder="T-shirt hoặc mã SKU đầy đủ" /></label><label>Màu<input name="color" placeholder="Black" /></label><label>Size<input name="size" placeholder="M" /></label><label>Giá catalog tối đa (USD)<input name="max_price" type="number" min="0" step=".01" /></label><button className="primary" disabled={busy}>Tìm sản phẩm</button></form><div className="product-grid">{searchProducts.map(p => <ProductCard key={p.id} product={p} onAdd={sku => run(() => addSku(sku))} />)}</div>{searched && !searchProducts.length && <div className="empty-state">Chưa có kết quả trong catalog hiện tại. Thử nới một điều kiện màu, size hoặc giá; nếu catalog trống, cần cấu hình API và đồng bộ.</div>}</>}
         {view === 'draft' && <><h1>Đơn nháp của bạn</h1><p>Đơn nhiều SKU được lưu theo tài khoản. Chọn một đơn để tiếp tục.</p><button className="primary" disabled={busy || saving} onClick={() => run(async () => {await newDraft();})}><Plus size={18} />Tạo đơn nháp</button><div className="record-list">{drafts.map(d => <button key={d.id} disabled={saving} onClick={() => run(() => openDraft(d.id))}><strong>{d.lines.map(l => l.sku).join(', ') || 'Đơn nháp trống'}</strong><span>{d.lines.length} dòng · phiên bản {d.version} · {d.address.name || 'Chưa có người nhận'}</span></button>)}</div></>}
         {view === 'designs' && <><h1>Thư viện thiết kế</h1><p>Preview file gốc đã lưu. Chưa phải mockup hay xác nhận chuẩn in.</p><label>Phiên bản mới của<select value={previousAsset} onChange={e => setPreviousAsset(e.target.value)}><option value="">Thiết kế mới</option>{assets.map(a => <option key={a.id} value={a.id}>{a.name} · v{a.file_version}</option>)}</select></label><div className="design-import"><label className="upload-box">Tải PNG, JPEG hoặc WebP · tối đa 25 MB<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={e => {const file = e.target.files?.[0]; if (!file) return; e.target.value = ''; run(async () => {const form = new FormData(); form.set('file', file); await api(`/assets/upload?previous_id=${previousAsset}`, 'POST', form); await refreshLists(); setNotice('Đã lưu phiên bản file. Chọn lại file trong dòng sản phẩm để dùng bản mới.');});}} /></label><form onSubmit={e => {e.preventDefault(); const data = Object.fromEntries(new FormData(e.currentTarget)); run(async () => {await api('/assets/import', 'POST', {...data, previous_id: previousAsset}); await refreshLists();});}}><label>Tên thiết kế<input name="name" required /></label><label>URL ảnh công khai<input name="url" type="url" required placeholder="https://…/design.png" /></label><button disabled={busy}>Nhập từ URL</button></form></div><label>Tìm theo tên / phân loại<input value={assetQuery} onChange={e => setAssetQuery(e.target.value)} /></label><div className="asset-grid">{assets.filter(a => `${a.name} ${a.tags}`.toLowerCase().includes(assetQuery.toLowerCase())).map(a => <article className="asset-card" key={a.id}><img src={apiUrl(`/assets/${a.id}/preview`)} alt={`Preview ${a.name}, phiên bản ${a.file_version}`} /><h3>{a.name} · v{a.file_version}</h3><p>{a.validation.width} × {a.validation.height} px</p><p className="muted">{a.validation.message}</p><form onSubmit={e => {e.preventDefault(); const data = Object.fromEntries(new FormData(e.currentTarget)); run(async () => {await api(`/assets/${a.id}`, 'PATCH', {version: a.version, ...data}); await refreshLists();});}}><label>Tên<input name="name" defaultValue={a.name} required /></label><label>Phân loại<input name="tags" defaultValue={a.tags} /></label><button disabled={busy}>Lưu tên và phân loại</button></form></article>)}</div>{!assets.length && <p className="empty-state">Thư viện chưa có file. Tải file hoặc nhập URL để bắt đầu.</p>}</>}
         {view === 'orders' && <><h1>Đơn hàng trong tài khoản</h1><p>Chỉ hiển thị đơn đã gửi từ tài khoản ứng dụng này tới store demo.</p><button onClick={() => run(refreshLists)}>Tải lại danh sách</button><div className="record-list">{orders.map(order => <article key={order.reference} className="order-card"><h3>{String(order.result.order_id || order.reference)}</h3><p><strong>{stateText[order.state] || order.state}</strong></p><p className="muted">Mã tham chiếu: {order.reference}<br />{timeText(order.updated_at)}</p><p>Trạng thái nguồn: {String((order.result.detail as Record<string, unknown> | undefined)?.state || (order.result.detail as Record<string, unknown> | undefined)?.status || 'Chưa cập nhật')}</p><button disabled={busy} onClick={() => run(async () => {await api(`/orders/${order.reference}/refresh`, 'POST'); await refreshLists();})}>Đối chiếu đơn và tracking</button>{Boolean(order.result.message) && <p>{String(order.result.message)}</p>}<OrderDetails result={order.result} /><button onClick={() => {navigate('support'); setNotice(`Mã tham chiếu cần hỗ trợ: ${order.reference}`);}}>Yêu cầu hỗ trợ</button></article>)}</div>{!orders.length && <p className="empty-state">Chưa có yêu cầu gửi đơn. Bạn có thể tiếp tục từ Đơn nháp.</p>}</>}

@@ -374,19 +374,40 @@ def test_chat_persists_messages_and_structured_criteria(env, monkeypatch):
     register(client)
     conversation = client.post('/api/conversations').json()
     from core.chat_context import tool_events, owner_context
+
     async def fake_chat(session_id, message):
         assert owner_context.get()
-        tool_events.get().append({'type': 'tool_result', 'tool': 'search_products',
-            'criteria': {'color': 'Black'}, 'result': {'results': [{'id': 'TEE', 'name': 'Test tee'}]}})
-        yield {'data': json.dumps({'text': 'Có một lựa chọn trong catalog.'})}
+        if message == 'Tìm áo màu đen':
+            tool_events.get().append({'type': 'tool_result', 'tool': 'search_products',
+                'criteria': {'color': 'Black'}, 'result': {'results': [{'id': 'TEE', 'name': 'Test tee'}]}})
+            answer = 'Có một lựa chọn trong catalog.'
+        elif message == 'Có màu khác không?':
+            tool_events.get().append({'type': 'tool_result', 'tool': 'search_products',
+                'criteria': {'color': 'Blue'}, 'result': {'results': []}})
+            answer = 'Mình chưa tìm được kết quả.'
+        else:
+            answer = 'Đây là câu hỏi khác.'
+        yield {'data': json.dumps({'text': answer})}
         yield {'data': '[DONE]'}
     monkeypatch.setattr('agent.gemini_agent.process_chat', fake_chat)
-    response = client.post('/api/chat/stream', json={'session_id': conversation['id'], 'message': 'Tìm áo màu đen'})
-    assert response.status_code == 200 and '[DONE]' in response.text
-    restored = client.get('/api/conversations/' + conversation['id']).json()
-    assert restored['messages'][0]['role'] == 'user'
-    assert restored['messages'][1]['role'] == 'agent'
-    assert restored['criteria']['color'] == 'Black'
+
+    with client:
+        for question in ['Tìm áo màu đen', 'Lợi nhuận gộp là gì?', 'Có màu khác không?']:
+            response = client.post('/api/chat/stream', json={'session_id': conversation['id'], 'message': question})
+            assert response.status_code == 200 and '[DONE]' in response.text
+
+    assert client.post('/api/logout').status_code == 200
+    login = client.post('/api/auth/login', json={'name': 'seller-a', 'password': 'a-long-password-123'})
+    assert login.status_code == 200
+    conversation_url = '/api/conversations/' + conversation['id']
+    restored = client.get(conversation_url).json()
+    assert [message['role'] for message in restored['messages']] == ['user', 'agent'] * 3
+    assert restored['messages'][1]['products'] == [{'id': 'TEE', 'name': 'Test tee'}]
+    assert all('products' not in restored['messages'][index] for index in [0, 2, 3, 4, 5])
+    assert restored['criteria']['color'] == 'Blue'
     assert restored['products'][0]['id'] == 'TEE'
+    assert client.get('/api/work/conversation').json()[0]['id'] == conversation['id']
     register(client, 'other-chat-owner')
+    assert client.get('/api/work/conversation').json() == []
+    assert client.get(conversation_url).status_code == 404
     assert client.post('/api/chat/stream', json={'session_id': conversation['id'], 'message': 'Đọc lại'}).status_code == 404
