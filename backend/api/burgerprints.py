@@ -12,6 +12,20 @@ from harness.api_response_policy import parse_burgerprints_error
 
 logger = logging.getLogger(__name__)
 
+
+async def _retry_catalog_read(read):
+    for attempt in range(3):
+        try:
+            return await read()
+        except httpx.HTTPStatusError as error:
+            if attempt == 2 or error.response.status_code not in {429, 500, 502, 503, 504}:
+                raise
+        except httpx.RequestError:
+            if attempt == 2:
+                raise
+        await asyncio.sleep(2 ** attempt)
+
+
 class BurgerPrintsClient:
     def __init__(self):
         self.base_url = settings.BURGERPRINTS_API_BASE_URL.rstrip('/')
@@ -122,8 +136,8 @@ class BurgerPrintsClient:
         conflicting_codes: set[str] = set()
         providers_by_id: Dict[str, Dict[str, Any]] = {}
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            semaphore = asyncio.Semaphore(12)
+        async with httpx.AsyncClient(timeout=max(self.timeout, 20.0)) as client:
+            semaphore = asyncio.Semaphore(6)
 
             async def fetch_detail(product: Dict[str, Any]) -> Dict[str, Any]:
                 short_code = product.get("id")
@@ -132,9 +146,11 @@ class BurgerPrintsClient:
                 async with semaphore:
                     try:
                         url = f"{self.base_url}/product/{short_code}"
-                        response = await client.get(url, headers=self.headers)
-                        response.raise_for_status()
-                        detail = (response.json().get("data") or {})
+                        async def read():
+                            response = await client.get(url, headers=self.headers)
+                            return response.raise_for_status().json()
+
+                        detail = (await _retry_catalog_read(read)).get("data") or {}
                         return self._normalize_product({**product["raw_json"], **detail}) if detail else product
                     except Exception as e:
                         logger.warning(f"Failed to fetch product detail {short_code}: {e}")
@@ -202,7 +218,8 @@ class BurgerPrintsClient:
         page = 1
         page_size = 500
         while True:
-            res = await self._get("/product", {"page": str(page), "page_size": str(page_size)})
+            params = {"page": str(page), "page_size": str(page_size)}
+            res = await _retry_catalog_read(lambda: self._get("/product", params))
             data = res.get("data") or {}
             if isinstance(data, list):
                 return [self._normalize_product(item) for item in data]

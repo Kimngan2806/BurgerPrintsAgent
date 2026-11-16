@@ -45,7 +45,7 @@ async def sync_catalog_to_cache(rebuild_search_index_fn=None):
         catalog_sync_status = f'upstream_http_{e.response.status_code}'
         logger.warning('BurgerPrints rejected catalog sync: HTTP %s', e.response.status_code)
     except httpx.RequestError as e:
-        catalog_sync_status = 'upstream_unreachable'
+        catalog_sync_status = 'upstream_timeout' if isinstance(e, httpx.TimeoutException) else 'upstream_unreachable'
         logger.warning('Could not reach BurgerPrints catalog: %s', type(e).__name__)
     except Exception as e:
         catalog_sync_status = 'invalid_snapshot' if not db_store.has_catalog() else 'ready'
