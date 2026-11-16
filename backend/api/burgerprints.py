@@ -50,13 +50,18 @@ class BurgerPrintsClient:
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPStatusError as e:
-                logger.error(f"Error calling POST {endpoint}: {e}")
-                if e.response.status_code >= 500:
-                    return {"_uncertain": True, "message": "Server error after submission; reconcile by reference."}
+                status = e.response.status_code
+                logger.error("Error calling POST %s: HTTP %s", endpoint, status)
+                if status >= 500 or status in (408, 409):
+                    return {"_uncertain": True, "message": "Chưa rõ kết quả gửi đơn. Hãy đối chiếu mã tham chiếu."}
                 try:
-                    return e.response.json()
-                except Exception:
-                    return {"is_success": False, "message": e.response.text or str(e), "errors": []}
+                    body = e.response.json()
+                except ValueError:
+                    body = {}
+                if not isinstance(body, dict):
+                    body = {}
+                return {**body, "is_success": False,
+                        "message": body.get("message") or body.get("detail") or e.response.text or f"HTTP {status}"}
             except Exception as e:
                 logger.error(f"Error calling POST {endpoint}: {e}")
                 return {"_uncertain": True, "message": "Connection interrupted; reconcile the order before retrying.", "errors": []}

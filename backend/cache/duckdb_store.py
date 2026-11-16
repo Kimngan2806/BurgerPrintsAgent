@@ -395,6 +395,16 @@ class DuckDBStore:
         df = self.conn.execute("SELECT * FROM skus WHERE product_id = ?", (product_id,)).fetchdf()
         return [row.to_dict() for _, row in df.iterrows()]
 
+    def get_skus_by_base_code(self, base_code: str) -> List[Dict]:
+        cursor = self.conn.execute(
+            """SELECT * FROM skus WHERE upper(product_id) = upper(?)
+                OR starts_with(upper(sku_code), upper(?) || '-')
+                ORDER BY color, size, sku_code LIMIT 10""",
+            (base_code, base_code),
+        )
+        columns = [column[0] for column in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
     def get_product_by_id(self, product_id: str) -> Optional[Dict]:
         if not product_id:
             return None

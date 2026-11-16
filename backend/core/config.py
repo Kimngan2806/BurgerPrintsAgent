@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-3.1-flash-lite"
     GEMINI_FALLBACK_MODEL: str = "gemini-3.6-flash"
     OPENROUTER_API_KEY: str = ""
-    OPENROUTER_MODEL: str = "google/gemma-4-31b-it:free"
+    OPENROUTER_MODEL: str = "cohere/north-mini-code:free"
     VIETCOD_API_KEY: str = ""
     VIETCOD_MODEL: str = "gemini-3.8-flash-high"
     SEEDANCE_API_KEY: str = ""

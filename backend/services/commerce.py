@@ -27,6 +27,8 @@ class Address(BaseModel):
     state: str = ''
     zip: str = ''
     country: str = 'US'
+    email: str = Field(default='', max_length=254)
+    phone: str = Field(default='', max_length=40)
 
 
 class DraftInput(BaseModel):
@@ -54,22 +56,35 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
-async def build_review(owner, draft):
+async def build_review(owner, draft, *, chat_confirmation=False):
     from cache.duckdb_store import db_store
     from api.burgerprints import BurgerPrintsClient
     if not draft['lines']:
         raise HTTPException(422, 'Đơn nháp chưa có sản phẩm.')
-    address = draft['address']
+    address = Address.model_validate(draft['address']).model_dump()
+    address = {key: value.strip() for key, value in address.items()}
     required = ['name', 'street', 'city', 'zip', 'country'] + (['state'] if address['country'].upper() == 'US' else [])
+    if chat_confirmation:
+        required += ['email', 'phone']
     missing = [key for key in required if not address.get(key, '').strip()]
     if missing:
-        raise HTTPException(422, 'Bổ sung địa chỉ: ' + ', '.join(missing))
+        labels = {'name': 'tên người nhận', 'street': 'số nhà và tên đường', 'city': 'thành phố',
+                  'zip': 'mã bưu chính', 'country': 'quốc gia', 'state': 'bang', 'email': 'email',
+                  'phone': 'số điện thoại'}
+        raise HTTPException(422, 'Vui lòng bổ sung ' + ', '.join(labels[key] for key in missing) + '.')
+    if address['email'] and not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', address['email']):
+        raise HTTPException(422, 'Email người nhận chưa đúng định dạng.')
+    if address['phone'] and (not re.fullmatch(r'\+?[\d().\s-]+', address['phone'])
+                             or not 7 <= sum(ch.isdigit() for ch in address['phone']) <= 15):
+        raise HTTPException(422, 'Số điện thoại người nhận cần có từ 7 đến 15 chữ số.')
     if len(address['country']) != 2 or not address['country'].isalpha():
         raise HTTPException(422, 'Quốc gia cần mã ISO hai chữ cái, ví dụ US, VN.')
     if address['country'].upper() == 'US' and not re.fullmatch(r'\d{5}(-\d{4})?', address['zip'].strip()):
         raise HTTPException(422, 'Mã bưu chính US cần 5 chữ số hoặc ZIP+4, ví dụ 90210 hoặc 90210-1234.')
-    if not draft['acknowledge_unverified_print']:
+    if not chat_confirmation and not draft['acknowledge_unverified_print']:
         raise HTTPException(422, 'Chưa có quy chuẩn theo SKU. Cần tự đối chiếu template và xác nhận trước khi duyệt đơn.')
+    if any(not line.get('asset_id') for line in draft['lines']):
+        raise HTTPException(422, 'Vui lòng gửi URL ảnh thiết kế công khai hoặc chọn file cho từng SKU.')
     availability = await BurgerPrintsClient().check_sku_availability([line['sku'] for line in draft['lines']])
     lines = []
     for line in draft['lines']:
@@ -97,33 +112,39 @@ async def build_review(owner, draft):
         'transaction_notice': settings.STORE_TRANSACTION_NOTICE or 'Sandbox kiểm thử. Chưa xác minh cấu hình thanh toán tự động cho đơn thật.'}
 
 
-async def review_draft(owner, ident, version):
+async def review_draft(owner, ident, version, *, chat_confirmation=False):
     draft = workspace.get(owner, ident, 'draft')
     if draft['version'] != version:
         raise HTTPException(409, 'Đơn đã thay đổi. Tải lại và duyệt phiên bản mới.')
-    summary = await build_review(owner, draft)
+    summary = await build_review(owner, draft, chat_confirmation=chat_confirmation)
     review = workspace.create(owner, 'review', {'draft_id': ident, 'draft_version': version,
-        'summary': summary, 'expires_at': time.time() + 600})
+        'summary': summary, 'expires_at': time.time() + 600, 'chat_confirmation': chat_confirmation})
     workspace.event(owner, 'order_review', ident)
     return review
 
 
-async def submit_draft(owner, ident, review_id):
+async def submit_draft(owner, ident, review_id, *, chat_confirmation=False):
     from api.burgerprints import BurgerPrintsClient
     review = workspace.get(owner, review_id, 'review')
-    if review['draft_id'] != ident or review['expires_at'] < time.time():
-        raise HTTPException(409, 'Bản duyệt không hợp lệ hoặc hết hạn. Duyệt lại đơn.')
+    if review['draft_id'] != ident:
+        raise HTTPException(409, 'Bản duyệt không thuộc đơn này. Duyệt lại đơn.')
+    if bool(review.get('chat_confirmation')) != chat_confirmation:
+        raise HTTPException(409, 'Hãy xác nhận ở nơi bạn đã xem bản duyệt đơn.')
     with workspace.connect() as db:
         existing = db.execute('SELECT * FROM submissions WHERE draft=? AND version=? AND owner=?',
                               (ident, review['draft_version'], owner)).fetchone()
     if existing:
         return submission_dict(existing)
+    if review['expires_at'] < time.time():
+        raise HTTPException(409, 'Bản duyệt đã hết hạn. Duyệt lại đơn.')
     draft = workspace.get(owner, ident, 'draft')
     if draft['version'] != review['draft_version']:
         raise HTTPException(409, 'Đơn đã sửa sau khi duyệt. Cần xác nhận phiên bản mới.')
-    summary = await build_review(owner, draft)
+    summary = await build_review(owner, draft, chat_confirmation=chat_confirmation)
     def stable(value):
         value = json.loads(json.dumps(value))
+        # Older reviews predate the optional contact fields.
+        value['address'] = Address.model_validate(value['address']).model_dump()
         for line in value['lines']:
             line.pop('availability', None)
         return value
@@ -142,6 +163,10 @@ async def submit_draft(owner, ident, review_id):
         'fulfillment_partner': 'BurgerPrintsAgent',
         'items': [{'catalog_sku': l['sku'], 'quantity': l['quantity'],
                    'design_url_front': l['design_url_front']} for l in summary['lines']]}
+    if address['email']:
+        payload['shipping_email'] = address['email']
+    if address['phone']:
+        payload['shipping_phone'] = address['phone']
     callback_token = secrets.token_urlsafe(32)
     payload['callback_url'] = settings.PUBLIC_FILE_BASE_URL.rstrip('/') + '/api/callbacks/' + reference + '/' + callback_token
     with workspace.connect() as db:

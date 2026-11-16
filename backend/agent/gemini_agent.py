@@ -90,7 +90,7 @@ def user_explicitly_confirmed_sku(message: str, sku: str) -> bool:
 
 async def execute_tool(func_name: str, args: dict, user_message: str = "", session_id: str = "") -> dict:
     """Thực thi tool mapping từ tên function call của Gemini"""
-    logger.info(f"Executing tool: {func_name} with args: {args}")
+    logger.info("Executing tool: %s", func_name)
     return await tool_executor.execute(func_name, args, user_message=user_message, session_id=session_id)
 
 async def process_chat(session_id: str, message: str):

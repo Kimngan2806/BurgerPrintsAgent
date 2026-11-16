@@ -132,6 +132,82 @@ def test_success_double_click_multiple_skus_and_no_fake_mockup(env, monkeypatch)
     assert calls[0]['reference_order_id'] == first.json()['reference']
 
 
+@pytest.mark.parametrize('api_result, expected', [
+    ({'is_success': True, 'order_id': 'BP-CHAT-1', 'status': 'Pending'}, 'BP-CHAT-1'),
+    ({'is_success': False, 'message': 'Address rejected', 'errors': {'shipping_zip': 'ZIP invalid'}}, 'ZIP invalid'),
+    ({'_uncertain': True, 'message': 'timeout'}, 'Đang xác minh'),
+])
+def test_chat_confirmation_requires_current_preview_and_never_sends_twice(env, monkeypatch, api_result, expected):
+    store, client = env
+    register(client)
+    owner = store.owner(client.cookies.get('bp_session'))
+    draft, _ = ready_draft(client)
+    body = {k: v for k, v in draft.items() if k not in {'id', 'updated_at', 'version'}}
+    body['address'].update({'email': 'buyer@example.test', 'phone': '+12025550101'})
+    body['acknowledge_unverified_print'] = False
+    draft = store.update(owner, draft['id'], 'draft', draft['version'], body)
+    conversation = client.post('/api/conversations').json()
+    assert client.put(f"/api/conversations/{conversation['id']}/draft", json={'draft_id': draft['id']}).is_success
+    calls = []
+
+    async def post(self, endpoint, payload):
+        calls.append(payload)
+        return api_result
+
+    monkeypatch.setattr(BurgerPrintsClient, '_post', post)
+
+    def say(message):
+        response = client.post('/api/chat', json={'session_id': conversation['id'], 'message': message})
+        assert response.is_success, response.text
+        return response.json()['response']
+
+    assert 'cần xem bản duyệt' in say('XÁC NHẬN ĐƠN HÀNG')
+    assert 'Bản duyệt' in say('XEM BẢN DUYỆT')
+    body['lines'][0]['quantity'] = 5
+    store.update(owner, draft['id'], 'draft', draft['version'], body)
+    assert 'Đơn đã sửa' in say('XAC NHẬN ĐƠN HÀNG')
+    assert calls == []
+    assert '**5**' in say('XEM BẢN DUYỆT')
+    assert expected in say('XAC NHẬN ĐƠN HÀNG')
+    assert expected in say('XÁC NHẬN ĐƠN HÀNG')
+    assert len(calls) == 1
+    assert calls[0]['sandbox'] is True
+    assert calls[0]['items'][0]['quantity'] == 5
+    assert calls[0]['shipping_email'] == 'buyer@example.test'
+    assert calls[0]['shipping_phone'] == '+12025550101'
+
+
+def test_checkout_chat_displays_validation_and_preview_after_saved_draft(env, monkeypatch):
+    store, client = env
+    register(client)
+    owner = store.owner(client.cookies.get('bp_session'))
+    draft, _ = ready_draft(client)
+    conversation = client.post('/api/conversations').json()
+    url = f"/api/conversations/{conversation['id']}/draft"
+
+    async def save_update(session_id, message):
+        from core.chat_context import tool_events
+        current = store.get(owner, draft['id'], 'draft')
+        body = {k: v for k, v in current.items() if k not in {'id', 'updated_at', 'version'}}
+        if message == 'Bổ sung liên hệ':
+            body['address'].update(email='buyer@example.test', phone='+12025550101')
+        saved = store.update(owner, draft['id'], 'draft', current['version'], body)
+        tool_events.get().append({'tool': 'update_draft', 'result': {'updated': True, 'draft': saved}})
+        yield {'data': json.dumps({'text': 'The draft was saved.'})}
+
+    monkeypatch.setattr('agent.gemini_agent.process_chat', save_update)
+
+    def say(message):
+        result = client.post('/api/chat', json={'session_id': conversation['id'], 'message': message})
+        assert result.is_success, result.text
+        return result.json()['response']
+
+    assert 'Bạn muốn đặt SKU nào?' in say('Tôi muốn đặt hàng.')
+    assert client.put(url, json={'draft_id': draft['id']}).is_success
+    assert 'bổ sung email, số điện thoại' in say('Lưu đơn trước')
+    assert 'XÁC NHẬN ĐƠN HÀNG' in say('Bổ sung liên hệ')
+
+
 @pytest.mark.parametrize('response', [
     {'_uncertain': True, 'message': 'timeout'}, {'is_success': True}, {'code': 503}, {}])
 def test_uncertain_never_retries_or_reports_success(env, monkeypatch, response):

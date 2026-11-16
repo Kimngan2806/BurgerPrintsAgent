@@ -34,17 +34,17 @@ search_products_func = FunctionDeclaration(
 # =======================================================
 get_sku_info_func = FunctionDeclaration(
     name="get_sku_info",
-    description="Láº¥y danh sÃ¡ch cÃ¡c SKUs (bao gá»“m mÃ u sáº¯c, kÃ­ch thÆ°á»›c, xÆ°á»Ÿng, mÃ£ sku_code) cá»§a má»™t product_id cá»¥ thá»ƒ.",
+    description="Tra mã SKU hoặc mã dòng sản phẩm. Nếu người dùng nhập mã dòng, kết quả SKU_VARIANT_REQUIRED chứa các SKU đầy đủ để họ chọn.",
     parameters={
         "type": "object",
         "properties": {
             "sku_code": {
                 "type": "string",
-                "description": "Ma SKU cu the user dua, vi du USBG5000DTF-Black-S. Uu tien dung field nay khi user muon xem hoac dat mot SKU."
+                "description": "Mã người dùng đưa khi muốn xem hoặc đặt hàng, ví dụ USTG5000 hoặc USBG5000DTF-Black-S."
             },
             "product_id": {
                 "type": "string",
-                "description": "ID cá»§a sáº£n pháº©m (vÃ­ dá»¥: P1, P2)"
+                "description": "Mã dòng sản phẩm đã tra được trong catalog."
             }
         },
     }
@@ -280,13 +280,15 @@ agent_tools = Tool(
             'type': 'object', 'properties': {
                 **{k: {'type': 'number'} for k in ['sale_price', 'discount_percent', 'production_per_item', 'shipping_total', 'platform_total', 'other_total']},
                 'quantity': {'type': 'integer'}}, 'required': ['sale_price']}),
-        FunctionDeclaration(name='update_draft', description='Read the current persistent draft with no arguments. To edit, send its current version and complete lines/address. Cannot confirm or submit an order.', parameters={
+        FunctionDeclaration(name='update_draft', description='Đọc đơn nháp với tham số rỗng. Khi sửa, gửi version hiện tại, toàn bộ lines nếu đổi sản phẩm và chỉ các trường address người dùng vừa cung cấp. Chỉ gắn URL thiết kế do người dùng gửi. Không dùng công cụ để xác nhận hoặc gửi đơn.', parameters={
             'type': 'object', 'properties': {
                 'version': {'type': 'integer'},
                 'lines': {'type': 'array', 'items': {'type': 'object', 'properties': {
                     'sku': {'type': 'string'}, 'quantity': {'type': 'integer'},
-                    'asset_id': {'type': 'string'}, 'position': {'type': 'string'}}, 'required': ['sku', 'quantity']}},
-                'address': {'type': 'object', 'properties': {key: {'type': 'string'} for key in ['name', 'street', 'city', 'state', 'zip', 'country']}}
+                    'asset_id': {'type': 'string'}, 'position': {'type': 'string'},
+                    'design_url_front': {'type': 'string', 'description': 'URL ảnh công khai chính xác do người dùng gửi cho dòng SKU này.'}},
+                    'required': ['sku', 'quantity']}},
+                'address': {'type': 'object', 'properties': {key: {'type': 'string'} for key in ['name', 'street', 'city', 'state', 'zip', 'country', 'email', 'phone']}}
             }}),
         get_sku_info_func,
         get_base_cost_func,

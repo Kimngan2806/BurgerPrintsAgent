@@ -7,6 +7,10 @@ from sse_starlette.sse import EventSourceResponse
 from api.models import ChatRequest, ChatResponse
 from core.workspace import current_owner, workspace
 from core.chat_context import owner_context, conversation_context, tool_events
+from services.chat_order import (
+    ASK_SKU, CONFIRM_COMMAND, REVIEW_COMMAND, START_COMMAND, confirm_chat_order, is_command,
+    order_chat_reply, preview_chat_order,
+)
 
 router = APIRouter()
 
@@ -28,22 +32,52 @@ async def stream(owner, request, lease):
     from agent.gemini_agent import process_chat
     tokens = [owner_context.set(owner), conversation_context.set(request.session_id), tool_events.set([])]
     content, failed = '', False
+    review_changed, chat_review = False, None
     try:
         conversation = workspace.get(owner, request.session_id, 'conversation')
         body = {k: v for k, v in conversation.items() if k not in {'id', 'version', 'updated_at'}}
         body['title'] = request.message[:65] if not body['messages'] else body['title']
         body['messages'].append({'id': secrets.token_hex(8), 'role': 'user', 'content': request.message})
-        workspace.update(owner, request.session_id, 'conversation', conversation['version'], body)
+        conversation = workspace.update(owner, request.session_id, 'conversation', conversation['version'], body)
         async with asyncio.timeout(180):
-            async for event in process_chat(request.session_id, request.message):
-                if event.get('data') == '[DONE]':
-                    continue
-                data = json.loads(event['data'])
-                content += data.get('text', '')
-                if data.get('error'):
-                    content += '\n\nLỗi: ' + data['error']
-                    failed = True
-                yield event
+            if is_command(request.message, CONFIRM_COMMAND):
+                content = await confirm_chat_order(owner, conversation)
+                yield {'data': json.dumps({'text': content})}
+            elif is_command(request.message, REVIEW_COMMAND):
+                chat_review, content = await preview_chat_order(owner, conversation)
+                review_changed = True
+                yield {'data': json.dumps({'text': content})}
+            elif not conversation.get('draft_id') and is_command(request.message.strip('.!?'), START_COMMAND):
+                content = ASK_SKU
+                yield {'data': json.dumps({'text': content})}
+            else:
+                order_reply = None
+                async for event in process_chat(request.session_id, request.message):
+                    if event.get('data') == '[DONE]':
+                        continue
+                    data = json.loads(event['data'])
+                    if data.get('text'):
+                        if order_reply is None:
+                            order_reply = order_chat_reply(tool_events.get(), conversation, request.message) or ''
+                            if order_reply:
+                                content += order_reply
+                                yield {'data': json.dumps({'text': order_reply})}
+                        if order_reply:
+                            continue
+                    content += data.get('text', '')
+                    if data.get('error'):
+                        content += '\n\nLỗi: ' + data['error']
+                        failed = True
+                    yield event
+                if any(event['tool'] == 'update_draft' and event['result'].get('updated')
+                       for event in tool_events.get()):
+                    conversation = workspace.get(owner, request.session_id, 'conversation')
+                    chat_review, preview = await preview_chat_order(owner, conversation)
+                    review_changed = True
+                    if chat_review or order_reply:
+                        preview = '\n\n' + preview if content else preview
+                        content += preview
+                        yield {'data': json.dumps({'text': preview})}
         for event in tool_events.get():
             yield {'data': json.dumps(event, ensure_ascii=False, default=str)}
     except asyncio.CancelledError:
@@ -57,6 +91,8 @@ async def stream(owner, request, lease):
         try:
             conversation = workspace.get(owner, request.session_id, 'conversation')
             body = {k: v for k, v in conversation.items() if k not in {'id', 'version', 'updated_at'}}
+            if review_changed:
+                body['chat_order_review'] = chat_review
             for event in tool_events.get() or []:
                 if event['tool'] == 'search_products':
                     body['criteria'] = event.get('criteria', {})

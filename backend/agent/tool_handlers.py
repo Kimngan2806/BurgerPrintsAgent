@@ -1,4 +1,5 @@
 import json
+import re
 
 from api.burgerprints import BurgerPrintsClient
 from api.models import OrderAddress, OrderRequest
@@ -165,10 +166,17 @@ def _price_at_most(value, maximum):
 
 
 async def get_sku_info(args: dict) -> dict:
-    sku_code = args.get("sku_code") or args.get("sku")
+    sku_code = (args.get("sku_code") or args.get("sku") or "").strip()
     if sku_code:
         sku = db_store.get_sku_by_code(sku_code)
         if not sku:
+            options = db_store.get_skus_by_base_code(sku_code)
+            if options:
+                return {'ok': False, 'code': 'SKU_VARIANT_REQUIRED', 'base_code': sku_code,
+                        'options': [slim_sku(option) for option in options],
+                        'note': 'Show a few exact options and have the seller choose a complete SKU. Never choose one automatically.'}
+            if not db_store.has_catalog():
+                return {'ok': False, 'code': 'CATALOG_UNAVAILABLE', 'note': 'Catalog chưa đồng bộ.'}
             return {"ok": False, "code": "SKU_NOT_FOUND", "sku_code": sku_code}
 
         product = db_store.get_product_by_id(sku.get("product_id")) or {}
@@ -192,7 +200,7 @@ async def get_sku_info(args: dict) -> dict:
             "order_requirements": _extract_design_requirements(product, sku),
             "order_flow_hint": (
                 "Show this SKU/product information to the user first. If product_image_url exists, render it as a Markdown image. "
-                "Before create_order, ask for destination country, required address fields, quantity, and design_url_front."
+                "Ask for quantity, then save the draft and collect recipient, contact, address and design information."
             ),
         }
 
@@ -293,36 +301,72 @@ async def create_order(args: dict) -> dict:
 async def update_draft(args: dict) -> dict:
     from core.chat_context import owner_context, conversation_context
     from core.workspace import workspace
-    from services.commerce import DraftInput, draft_body
+    from services.commerce import Address, DraftInput, draft_body
     from fastapi import HTTPException
+    from pydantic import ValidationError
     owner, conversation_id = owner_context.get(), conversation_context.get()
     if not owner or not conversation_id:
         return {'ok': False, 'error': 'Authentication required.'}
     conversation = workspace.get(owner, conversation_id, 'conversation')
     ident = conversation.get('draft_id')
     if not ident:
-        draft = workspace.create(owner, 'draft', DraftInput(version=1).model_dump(exclude={'version'}))
+        first_draft = DraftInput(version=1, address=Address(country=''))
+        draft = workspace.create(owner, 'draft', first_draft.model_dump(exclude={'version'}))
         ident = draft['id']
         body = {k: v for k, v in conversation.items() if k not in {'id', 'version', 'updated_at'}}
         body['draft_id'] = ident
         workspace.update(owner, conversation_id, 'conversation', conversation['version'], body)
     else:
         draft = workspace.get(owner, ident, 'draft')
-    if not args.get('lines') and not args.get('address'):
+    if 'lines' not in args and 'address' not in args:
         return {'ok': True, 'draft': draft}
     try:
-        # Full replacement uses the version returned by the preceding read.
-        data = DraftInput(version=args.get('version', 0), lines=args.get('lines', draft['lines']),
-                          address=args.get('address', draft['address']), acknowledge_unverified_print=False)
+        if args.get('version') != draft['version']:
+            return {'ok': False, 'error': 'Đơn nháp đã thay đổi. Hãy đọc lại phiên bản hiện tại trước khi lưu.'}
+        address = {**draft['address'], **(args.get('address') or {})}
+        lines = [dict(line) for line in args.get('lines', draft['lines'])]
+        design_urls = [line.pop('design_url_front', '') for line in lines]
+        for line in lines:
+            if 'asset_id' not in line:
+                previous = [old for old in draft['lines'] if old['sku'].casefold() == line.get('sku', '').casefold()]
+                if len(previous) == 1:
+                    line['asset_id'] = previous[0]['asset_id']
+        data = DraftInput(version=draft['version'], lines=lines, address=address, acknowledge_unverified_print=False)
         body = draft_body(data)
+        seller_messages = [message['content'] for message in conversation.get('messages', [])[-16:]
+                           if message['role'] == 'user']
+        current_skus = {line['sku'].casefold() for line in draft['lines']}
         for line in body['lines']:
+            sku = line['sku']
+            selection = re.compile(rf'(?<![\w-]){re.escape(sku)}(?![\w-])', re.IGNORECASE)
+            if sku.casefold() not in current_skus and not any(selection.search(message) for message in seller_messages):
+                return {'ok': False, 'error': f'Vui lòng nhắn lại mã SKU đầy đủ bạn chọn: {sku}.'}
             if line['asset_id']:
                 workspace.get(owner, line['asset_id'], 'asset')
+        if any(design_urls):
+            from routers.workspace import ImportFile, import_file
+
+            provided_urls = {
+                url.rstrip('.,;!?') for message in seller_messages
+                for url in re.findall(r'https?://[^\s<>\[\]()]+', message)
+            }
+            if any(url and (url not in provided_urls or len(url) > 2048) for url in design_urls):
+                return {'ok': False, 'error': 'Vui lòng gửi URL ảnh thiết kế công khai để mình gắn vào đơn nháp.'}
+            imported_assets = {}
+            for line, url in zip(body['lines'], design_urls):
+                if url:
+                    if url not in imported_assets:
+                        asset = await import_file(ImportFile(url=url, name='Thiết kế mặt trước'), owner=owner)
+                        imported_assets[url] = asset['id']
+                    line['asset_id'] = imported_assets[url]
         result = workspace.update(owner, ident, 'draft', data.version, body)
         workspace.event(owner, 'draft_saved', ident)
-        return {'ok': True, 'draft': result, 'next': 'Open the draft panel to review and confirm.'}
+        return {'ok': True, 'updated': True, 'draft': result,
+                'next': 'Ask for any missing fields. The app displays the review and confirmation instructions when ready.'}
     except HTTPException as exc:
         return {'ok': False, 'error': exc.detail}
+    except (ValidationError, TypeError, ValueError, AttributeError):
+        return {'ok': False, 'error': 'Thông tin đơn nháp chưa đúng định dạng. Kiểm tra SKU, số lượng và địa chỉ.'}
 
 
 async def calculate_profit(args: dict) -> dict:

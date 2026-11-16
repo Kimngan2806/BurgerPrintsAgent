@@ -21,7 +21,7 @@ class ToolExecutor:
         args.pop('_session_id', None)
         if name in {'create_order', 'prepare_order_review'}:
             return {'ok': False, 'code': 'DRAFT_CONFIRMATION_REQUIRED',
-                    'error': 'Use update_draft, then ask the user to review and confirm in the order panel. The AI cannot submit orders.'}
+                    'error': 'Save details using update_draft. The app handles order review and seller confirmation.'}
         if session_id:
             args.setdefault("_session_id", session_id)
         definition = self.registry.get(name)
