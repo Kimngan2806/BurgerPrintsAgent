@@ -5,8 +5,10 @@ import secrets
 import re
 import time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import anyio
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, ConfigDict
+from starlette.concurrency import run_in_threadpool
 from core.config import settings
 from core.workspace import workspace
 
@@ -95,7 +97,7 @@ async def build_review(owner, draft, *, chat_confirmation=False):
             raise HTTPException(422, f"SKU {line['sku']} đang có trong danh sách hết hàng.")
         if not record.get('cached_at') or time.time() - record['cached_at'] > settings.CATALOG_MAX_AGE_SECONDS:
             raise HTTPException(422, 'Catalog đã cũ. Đồng bộ lại trước khi duyệt đơn.')
-        asset = workspace.get(owner, line['asset_id'], 'asset')
+        asset = await run_in_threadpool(workspace.get, owner, line['asset_id'], 'asset')
         if not settings.PUBLIC_FILE_BASE_URL.startswith('https://'):
             raise HTTPException(422, 'Cần cấu hình PUBLIC_FILE_BASE_URL HTTPS để fulfillment đọc file đã lưu.')
         product = db_store.get_product_by_id(record['product_id']) or {}
@@ -113,31 +115,51 @@ async def build_review(owner, draft, *, chat_confirmation=False):
 
 
 async def review_draft(owner, ident, version, *, chat_confirmation=False):
-    draft = workspace.get(owner, ident, 'draft')
+    draft = await run_in_threadpool(workspace.get, owner, ident, 'draft')
     if draft['version'] != version:
         raise HTTPException(409, 'Đơn đã thay đổi. Tải lại và duyệt phiên bản mới.')
     summary = await build_review(owner, draft, chat_confirmation=chat_confirmation)
-    review = workspace.create(owner, 'review', {'draft_id': ident, 'draft_version': version,
-        'summary': summary, 'expires_at': time.time() + 600, 'chat_confirmation': chat_confirmation})
-    workspace.event(owner, 'order_review', ident)
+    review = await run_in_threadpool(workspace.create, owner, 'review', {
+        'draft_id': ident, 'draft_version': version, 'summary': summary,
+        'expires_at': time.time() + 600, 'chat_confirmation': chat_confirmation,
+    })
+    await run_in_threadpool(workspace.event, owner, 'order_review', ident)
     return review
+
+
+def existing_submission(owner, ident, version):
+    with workspace.connect() as db:
+        row = db.execute('SELECT * FROM submissions WHERE draft=? AND version=? AND owner=?',
+                         (ident, version, owner)).fetchone()
+    return submission_dict(row) if row else None
+
+
+def reserve_submission(owner, ident, version, reference, payload):
+    with workspace.connect(lock=f'draft:{ident}') as db:
+        row = db.execute('SELECT version FROM documents WHERE id=? AND owner=? AND kind=?',
+                         (ident, owner, 'draft')).fetchone()
+        if not row or row['version'] != version:
+            raise HTTPException(409, 'Đơn đã thay đổi. Duyệt lại.')
+        existing = db.execute('SELECT * FROM submissions WHERE draft=? AND version=?', (ident, version)).fetchone()
+        if existing:
+            return submission_dict(existing)
+        db.execute('INSERT INTO submissions VALUES(?,?,?,?,?,?,?,?)',
+                   (reference, owner, ident, version, 'sending', json.dumps(payload), '{}', time.time()))
 
 
 async def submit_draft(owner, ident, review_id, *, chat_confirmation=False):
     from api.burgerprints import BurgerPrintsClient
-    review = workspace.get(owner, review_id, 'review')
+    review = await run_in_threadpool(workspace.get, owner, review_id, 'review')
     if review['draft_id'] != ident:
         raise HTTPException(409, 'Bản duyệt không thuộc đơn này. Duyệt lại đơn.')
     if bool(review.get('chat_confirmation')) != chat_confirmation:
         raise HTTPException(409, 'Hãy xác nhận ở nơi bạn đã xem bản duyệt đơn.')
-    with workspace.connect() as db:
-        existing = db.execute('SELECT * FROM submissions WHERE draft=? AND version=? AND owner=?',
-                              (ident, review['draft_version'], owner)).fetchone()
+    existing = await run_in_threadpool(existing_submission, owner, ident, review['draft_version'])
     if existing:
-        return submission_dict(existing)
+        return existing
     if review['expires_at'] < time.time():
         raise HTTPException(409, 'Bản duyệt đã hết hạn. Duyệt lại đơn.')
-    draft = workspace.get(owner, ident, 'draft')
+    draft = await run_in_threadpool(workspace.get, owner, ident, 'draft')
     if draft['version'] != review['draft_version']:
         raise HTTPException(409, 'Đơn đã sửa sau khi duyệt. Cần xác nhận phiên bản mới.')
     summary = await build_review(owner, draft, chat_confirmation=chat_confirmation)
@@ -169,16 +191,10 @@ async def submit_draft(owner, ident, review_id, *, chat_confirmation=False):
         payload['shipping_phone'] = address['phone']
     callback_token = secrets.token_urlsafe(32)
     payload['callback_url'] = settings.PUBLIC_FILE_BASE_URL.rstrip('/') + '/api/callbacks/' + reference + '/' + callback_token
-    with workspace.connect(lock=f'draft:{ident}') as db:
-        row = db.execute('SELECT version FROM documents WHERE id=? AND owner=? AND kind=?',
-                         (ident, owner, 'draft')).fetchone()
-        if not row or row['version'] != review['draft_version']:
-            raise HTTPException(409, 'Đơn đã thay đổi. Duyệt lại.')
-        existing = db.execute('SELECT * FROM submissions WHERE draft=? AND version=?', (ident, row['version'])).fetchone()
-        if existing:
-            return submission_dict(existing)
-        db.execute('INSERT INTO submissions VALUES(?,?,?,?,?,?,?,?)',
-                   (reference, owner, ident, row['version'], 'sending', json.dumps(payload), '{}', time.time()))
+    with anyio.CancelScope(shield=True):
+        existing = await run_in_threadpool(reserve_submission, owner, ident, review['draft_version'], reference, payload)
+    if existing:
+        return existing
     try:
         response = await BurgerPrintsClient()._post('/order', payload)
         if response.get('is_success') is True and response.get('order_id'):
@@ -187,11 +203,15 @@ async def submit_draft(owner, ident, review_id, *, chat_confirmation=False):
             state = 'rejected'
         else:
             state = 'verifying'
-        finish_submission(reference, state, response)
+        with anyio.CancelScope(shield=True):
+            await run_in_threadpool(finish_submission, reference, state, response)
     except BaseException:
-        finish_submission(reference, 'verifying', {'message': 'Chưa rõ kết quả. Đối chiếu mã tham chiếu; không gửi lại.'})
+        with anyio.CancelScope(shield=True):
+            await run_in_threadpool(finish_submission, reference, 'verifying', {
+                'message': 'Chưa rõ kết quả. Đối chiếu mã tham chiếu; không gửi lại.',
+            })
         raise
-    workspace.event(owner, 'order_' + state, ident)
+    await run_in_threadpool(workspace.event, owner, 'order_' + state, ident)
     return {'reference': reference, 'state': state, 'result': response}
 
 

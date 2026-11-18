@@ -1,7 +1,5 @@
-import numpy as np
 import logging
 from typing import List, Dict
-from rank_bm25 import BM25Okapi
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +12,10 @@ class HybridSearch:
         self.is_ready = False
 
     def build_index(self, products: List[Dict]):
-        import faiss
-        from sentence_transformers import SentenceTransformer
         """Khởi tạo/Rebuild cả BM25 và FAISS index từ danh sách sản phẩm"""
+        import faiss
+        from rank_bm25 import BM25Okapi
+        from sentence_transformers import SentenceTransformer
         if not products:
             logger.warning("No products provided to build search index.")
             return
@@ -51,6 +50,8 @@ class HybridSearch:
         if not self.is_ready or not self.products:
             logger.warning("Search index not ready.")
             return []
+
+        import numpy as np
 
         # 1. Sparse Search: BM25 (Top 50)
         bm25_scores = self.bm25.get_scores(self._tokenize(query))

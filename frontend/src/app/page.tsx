@@ -1,10 +1,10 @@
 'use client';
 
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {Menu, Plus, Send, Square, X, Sun, Moon, Package, FileImage, MessageSquare, ShoppingBag, LifeBuoy, Calculator, LogOut} from 'lucide-react';
 import MessageBubble from '@/components/MessageBubble';
 import StreamingIndicator from '@/components/StreamingIndicator';
-import {getApiBaseUrl} from '@/lib/api';
+import {ApiError, api, apiUrl, readChatStream, requestApi} from '@/lib/api';
 
 type Message = {id: string; role: 'user' | 'agent'; content: string; products?: Product[]};
 type Conversation = {id: string; title: string; messages: Message[]; draft_id?: string};
@@ -18,15 +18,6 @@ type Order = {reference: string; state: string; result: Record<string, unknown>;
 type Review = {id: string; draft_version: number; summary: {store: string; sandbox: boolean; lines: (Line & {product_name: string; color: string; size: string; catalog_price: string | null; file: {name: string; sha256: string}; availability: {status: string}})[]; address: Address; cost_note: string; unknown_costs: string[]; transaction_notice: string}};
 type View = 'chat' | 'search' | 'draft' | 'designs' | 'orders' | 'support' | 'profit';
 
-const apiUrl = (path: string) => `${getApiBaseUrl()}/api${path}`;
-async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetch(apiUrl(path), {method, credentials: 'include',
-    headers: body instanceof FormData ? undefined : {'Content-Type': 'application/json'},
-    body: body === undefined ? undefined : body instanceof FormData ? body : JSON.stringify(body)});
-  const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `Yêu cầu không hợp lệ (${response.status}). Kiểm tra các trường vừa nhập.`);
-  return data;
-}
 const timeText = (timestamp?: number) => timestamp ? new Date(timestamp * 1000).toLocaleString('vi-VN') : 'Chưa có thời điểm cập nhật';
 const stateText: Record<string, string> = {sending: 'Đang gửi / cần đối chiếu nếu bị gián đoạn', verifying: 'Đang xác minh — không gửi lại', created: 'Đã xác nhận tạo đơn', rejected: 'Nguồn từ chối — sửa đơn rồi duyệt lại', unknown: 'Chưa xác minh', out_of_stock: 'Có trong danh sách hết hàng', not_listed_out_of_stock: 'Không nằm trong danh sách hết hàng; chưa bảo đảm nhận đơn'};
 
@@ -73,6 +64,7 @@ export default function WorkspacePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [interruptedChat, setInterruptedChat] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
   const nearBottom = useRef(true);
   const bottom = useRef<HTMLDivElement>(null);
@@ -108,16 +100,27 @@ export default function WorkspacePage() {
     await api('/logout', 'POST');
     listScope.current += 1;
     setUser(null); setConversation(null); setConversations([]); setMessages([]); setInput('');
+    setInterruptedChat(null);
     setDraft(null); draftRef.current = null; setDrafts([]); setAssets([]); setReview(null); setPanel(false);
     setSearchProducts([]); setSearched(false); setOrders([]); setSupports([]); setMetrics([]); setCalculation(null);
     setView('chat');
   }
+  const restoreSession = useCallback(async () => {
+    setError('');
+    try {
+      setUser(await api<typeof user>('/me'));
+      setReady(true);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) setReady(true);
+      else setError(e instanceof Error ? e.message : 'Chưa tải được phiên làm việc.');
+    }
+  }, []);
   useEffect(() => {
-    api<typeof user>('/me').then(setUser).catch(() => {}).finally(() => setReady(true));
+    void restoreSession();
     const theme = localStorage.getItem('theme') === 'dark'; setDark(theme);
     document.documentElement.setAttribute('data-theme', theme ? 'dark' : 'light');
     return () => abort.current?.abort();
-  }, []);
+  }, [restoreSession]);
   useEffect(() => {if (user) refreshLists().catch(e => setError(e.message));}, [user]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {if (nearBottom.current) bottom.current?.scrollIntoView({behavior: loading ? 'auto' : 'smooth'});}, [messages, loading]);
   useEffect(() => {draftRef.current = draft;}, [draft]);
@@ -168,6 +171,7 @@ export default function WorkspacePage() {
     if (dirty) await saveDraft();
     const next = await api<Conversation>(`/conversations/${ident}`);
     setConversation(next); setMessages(next.messages); setView('chat'); setSidebar(false);
+    setInterruptedChat(null);
     if (next.draft_id) await openDraft(next.draft_id, false);
     else {setDraft(null); draftRef.current = null; setPanel(false); setReview(null);}
     nearBottom.current = true;
@@ -175,32 +179,25 @@ export default function WorkspacePage() {
   async function send(text = input) {
     if (!text.trim() || loading || busy) return;
     if (dirty) {try {await saveDraft();} catch (e) {setError((e as Error).message); return;}}
-    setError(''); setLoading(true); setInput(''); nearBottom.current = true;
+    setError(''); setNotice(''); setInterruptedChat(null); setLoading(true); setInput(''); nearBottom.current = true;
     let active = conversation;
+    let sent = false;
+    let accepted = false;
+    let completed = false;
+    const userId = crypto.randomUUID();
     const agentId = crypto.randomUUID();
     const controller = new AbortController(); abort.current = controller;
     try {
       if (!active) {active = await api<Conversation>('/conversations', 'POST'); setConversation(active);}
-      setMessages(prev => [...prev, {id: crypto.randomUUID(), role: 'user', content: text}, {id: agentId, role: 'agent', content: ''}]);
-      const response = await fetch(apiUrl('/chat/stream'), {method: 'POST', credentials: 'include', signal: controller.signal,
-        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({session_id: active.id, message: text})});
-      if (!response.ok || !response.body) {const failure = await response.json(); throw new Error(failure.detail || 'Không kết nối được chatbot.');}
-      const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''; let answer = ''; let ended = false;
-      while (!ended) {
-        const chunk = await reader.read(); if (chunk.done) break;
-        buffer += decoder.decode(chunk.value, {stream: true});
-        const events = buffer.split(/\r?\n\r?\n/); buffer = events.pop() || '';
-        for (const event of events) {
-          const value = event.split(/\r?\n/).filter(s => s.startsWith('data:')).map(s => s.slice(5).trimStart()).join('\n');
-          if (!value) continue;
-          if (value === '[DONE]') {ended = true; break;}
-          const data = JSON.parse(value);
-          if (data.type === 'tool_result') continue;
-          answer += data.text || (data.error ? `\n\n${data.error}` : '');
-          setMessages(prev => prev.map(m => m.id === agentId ? {...m, content: answer} : m));
-        }
-      }
-      if (!ended) throw new Error('Kết nối phản hồi bị ngắt. Mở lại lịch sử để kiểm tra phần đã lưu.');
+      if (controller.signal.aborted) {setInput(text); return;}
+      setMessages(prev => [...prev, {id: userId, role: 'user', content: text}, {id: agentId, role: 'agent', content: ''}]);
+      sent = true;
+      const response = await requestApi('/chat/stream', 'POST', {session_id: active.id, message: text}, controller.signal);
+      accepted = true;
+      await readChatStream(response, answer => {
+        setMessages(prev => prev.map(m => m.id === agentId ? {...m, content: answer} : m));
+      });
+      completed = true;
       const updated = await api<Conversation>(`/conversations/${active.id}`);
       setConversation(updated); setMessages(updated.messages);
       if (updated.draft_id) {
@@ -208,10 +205,19 @@ export default function WorkspacePage() {
       }
       await refreshLists();
     } catch (e) {
-      const stopped = e instanceof DOMException && e.name === 'AbortError';
-      const message = stopped ? 'Đã dừng trả lời. Thao tác này không hủy đơn hàng.' : (e as Error).message;
-      setNotice(stopped ? message : ''); if (!stopped) setError(message);
-      setMessages(prev => prev.map(m => m.id === agentId && !m.content ? {...m, content: message} : m));
+      const message = e instanceof Error ? e.message : 'Chưa hoàn tất được yêu cầu.';
+      const status = e instanceof ApiError ? e.status : undefined;
+      if (!sent || (!accepted && status !== undefined && status >= 400 && status < 500)) {
+        setInput(text);
+        setMessages(prev => prev.filter(m => m.id !== userId && m.id !== agentId));
+        setError(message);
+      } else {
+        setInterruptedChat(active?.id ?? null);
+        setMessages(prev => prev.filter(m => m.id !== agentId || Boolean(m.content)));
+        if (controller.signal.aborted) setNotice('Đã dừng nhận phản hồi. Tải lại hội thoại để kiểm tra nội dung đã lưu.');
+        else if (completed) setError('Đã nhận phản hồi. Tải lại hội thoại để xem nội dung đã lưu.');
+        else setError(`${message} Kiểm tra nội dung đã lưu trước khi gửi lại.`);
+      }
     } finally {setLoading(false); abort.current = null;}
   }
   async function addSku(code: string) {
@@ -225,7 +231,9 @@ export default function WorkspacePage() {
   }
   const navigate = (next: View) => {setView(next); setSidebar(false); if (next === 'draft') setPanel(true);};
 
-  if (!ready) return <main className="auth-screen"><p role="status">Đang khôi phục phiên làm việc…</p></main>;
+  if (!ready) return <main className="auth-screen">{error
+    ? <section className="auth-card"><p role="alert">{error}</p><button className="primary" onClick={restoreSession}>Tải lại phiên làm việc</button></section>
+    : <p role="status">Đang khôi phục phiên làm việc…</p>}</main>;
   if (!user) return <main className="auth-screen"><form className="auth-card" onSubmit={e => {e.preventDefault(); const data = new FormData(e.currentTarget); run(async () => {await api(`/auth/${authMode}`, 'POST', Object.fromEntries(data)); setUser(await api('/me'));});}}>
     <img src="/burgerprint-logo.svg" alt="BurgerPrints" width="180" /><h1>Không gian làm việc POD</h1>
     <p>Tìm SKU, chuẩn bị thiết kế và tiếp tục đơn nháp của bạn.</p><p className="demo-label">Demo một store · tài khoản ứng dụng riêng, không phải đăng nhập BurgerPrints</p>
@@ -237,6 +245,12 @@ export default function WorkspacePage() {
   </form></main>;
 
   const navigation: [View, string, React.ReactNode][] = [['chat', 'Hội thoại', <MessageSquare key="chat" size={18} />], ['draft', 'Đơn nháp', <ShoppingBag key="draft" size={18} />], ['orders', 'Đơn hàng', <Package key="orders" size={18} />], ['designs', 'Thiết kế', <FileImage key="designs" size={18} />], ['support', 'Hỗ trợ', <LifeBuoy key="support" size={18} />], ['profit', 'Tính lợi nhuận', <Calculator key="profit" size={18} />]];
+  const reloadChat = view === 'chat' && conversation && interruptedChat === conversation.id
+    ? <button disabled={busy || loading || dirty || saving} onClick={() => run(async () => {
+      await openConversation(conversation.id);
+      await refreshLists();
+    })}>Tải lại hội thoại</button>
+    : null;
   return <div className="workspace-shell">
     {sidebar && <button className="sidebar-scrim" aria-label="Đóng điều hướng" onClick={() => setSidebar(false)} />}
     <aside className={`workspace-nav ${sidebar ? 'is-open' : ''}`}>
@@ -251,8 +265,8 @@ export default function WorkspacePage() {
     </aside>
     <main className="workspace-main">
       <header className="workspace-header"><button className="mobile-menu" aria-label="Mở điều hướng" onClick={() => setSidebar(true)}><Menu size={22} /></button><div><strong>{view === 'search' ? 'Tìm sản phẩm' : navigation.find(n => n[0] === view)?.[1]}</strong><p className="muted">BurgerPrintsAgent · Trợ lý fulfillment</p></div><button onClick={() => {setPanel(!panel); if (!draft) navigate('draft');}}>Đơn nháp {draft ? `(${draft.lines.length})` : ''}</button></header>
-      {error && <div className="error-banner" role="alert">{error}<button aria-label="Đóng thông báo lỗi" onClick={() => setError('')}><X size={16} /></button></div>}
-      {notice && <div className="notice-banner" role="status">{notice}</div>}
+      {error && <div className="error-banner" role="alert">{error}{reloadChat}<button aria-label="Đóng thông báo lỗi" onClick={() => setError('')}><X size={16} /></button></div>}
+      {notice && <div className="notice-banner" role="status">{notice}{!error && reloadChat}</div>}
       {busy && <p className="task-progress" role="status">Đang xử lý…</p>}
       {view === 'chat' ? <>
         <div className="workspace-chat" onScroll={e => {const el = e.currentTarget; nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;}}>

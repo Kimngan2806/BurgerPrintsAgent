@@ -58,10 +58,10 @@ Bản Render dùng `requirements-runtime.txt`, không nạp Torch/SentenceTransf
 
 ## Kiểm tra sau deploy
 
-1. `/health` trả HTTP 200 và `workspace_storage` là `postgresql` nếu đã đặt URL.
+1. `/health` trả HTTP 200, `release` cho biết commit đang chạy trên Render, và `workspace_storage` là `postgresql` nếu đã đặt URL.
 2. Trang gốc hiển thị đăng nhập/đăng ký.
 3. Đăng ký tài khoản thử, mở trang làm việc và tạo đơn nháp.
-4. Có API key: xác nhận log sync catalog thành công, thử một câu chat và kiểm tra stream.
+4. Có API key: kiểm tra `catalog_ready` sau khi đồng bộ nền, rồi thử chat và kiểm tra luồng trả lời.
 5. Khởi động lại dịch vụ, đăng nhập với cùng tài khoản thử và mở lại hội thoại từ lịch sử.
 6. Giữ `ENABLE_ORDER_SUBMISSION=false` cho demo giao diện. Để thử giao dịch, dùng PostgreSQL và nghiệm thu luồng sandbox trước.
 

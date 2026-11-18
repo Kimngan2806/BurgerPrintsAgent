@@ -2,24 +2,39 @@ import duckdb
 import time
 import json
 import logging
+import os
 from typing import List, Dict, Any, Optional
-
-import pandas as pd
 
 from core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _rows(cursor):
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def _product_rows(cursor, *, decode_raw=False):
+    products = _rows(cursor)
+    for product in products:
+        product.pop("score", None)
+        for field in ("print_techniques", "available_sizes", "available_colors"):
+            product[field] = json.loads(product[field]) if product.get(field) else []
+        if decode_raw:
+            product["raw_json"] = json.loads(product["raw_json"]) if product.get("raw_json") else {}
+    return products
+
 
 class DuckDBStore:
     def __init__(self):
         self.db_path = settings.DUCKDB_PATH
         self.conn = self._connect_with_retry()
         self.init_schema()
+        self.catalog_ready = self.has_catalog()
 
     def _connect_with_retry(self, retries: int = 5, delay: float = 2.0):
         """Thử kết nối DuckDB nhiều lần để xử lý stale lock khi container restart."""
-        import os
-
         # Đảm bảo thư mục tồn tại
         db_dir = os.path.dirname(os.path.abspath(self.db_path))
         os.makedirs(db_dir, exist_ok=True)
@@ -33,9 +48,10 @@ class DuckDBStore:
                 pass
 
         last_exc = None
+        config = {"threads": 1} if os.environ.get("RENDER") == "true" else {}
         for attempt in range(1, retries + 1):
             try:
-                return duckdb.connect(self.db_path, read_only=False)
+                return duckdb.connect(self.db_path, read_only=False, config=config)
             except duckdb.IOException as e:
                 err_str = str(e)
                 last_exc = e
@@ -165,33 +181,37 @@ class DuckDBStore:
             raise ValueError('Invalid catalog relationships.')
         if len({s['sku_code'] for s in skus}) != len(skus):
             raise ValueError('Duplicate SKU codes.')
-        self.conn.execute('BEGIN TRANSACTION')
-        try:
-            self.seed_products(products, transaction=False)
-            self.seed_skus(skus, transaction=False)
-            self.seed_providers(providers, transaction=False)
-            self.conn.execute('COMMIT')
-        except BaseException:
-            self.conn.execute('ROLLBACK')
-            raise
+        # A cursor owns a separate transaction, so readers see the last committed snapshot.
+        with self.conn.cursor() as writer:
+            writer.execute('BEGIN TRANSACTION')
+            try:
+                self.seed_products(products, transaction=False, connection=writer)
+                self.seed_skus(skus, transaction=False, connection=writer)
+                self.seed_providers(providers, transaction=False, connection=writer)
+                writer.execute('COMMIT')
+            except BaseException:
+                writer.execute('ROLLBACK')
+                raise
+        self.catalog_ready = True
 
     def has_catalog(self) -> bool:
         return self.conn.execute(
             "SELECT EXISTS (SELECT 1 FROM products) AND EXISTS (SELECT 1 FROM skus)"
         ).fetchone()[0]
 
-    def seed_products(self, products: List[Dict], transaction=True):
+    def seed_products(self, products: List[Dict], transaction=True, *, connection=None):
         """Cập nhật data sản phẩm vào DuckDB"""
+        connection = self.conn if connection is None else connection
         now = int(time.time())
         products = list({p.get("id"): p for p in products if p.get("id")}.values())
         
         # Dùng Appender để insert hàng loạt siêu nhanh
         if transaction:
-            self.conn.execute("BEGIN TRANSACTION")
-        self.conn.execute("DELETE FROM products") # Đơn giản hóa: xóa cũ, thêm mới
+            connection.execute("BEGIN TRANSACTION")
+        connection.execute("DELETE FROM products") # Đơn giản hóa: xóa cũ, thêm mới
         
         for p in products:
-            self.conn.execute("""
+            connection.execute("""
                 INSERT INTO products (
                     id, name, category, description, material, style, print_techniques,
                     display_name, catalog_id, html_desc, url, design_type, design_url,
@@ -218,43 +238,57 @@ class DuckDBStore:
             ))
             
         if transaction:
-            self.conn.execute("COMMIT")
+            connection.execute("COMMIT")
+            self.catalog_ready = self.has_catalog()
         logger.info(f"Seeded {len(products)} products into DuckDB")
 
-    def seed_skus(self, skus: List[Dict], transaction=True):
+    def seed_skus(self, skus: List[Dict], transaction=True, *, connection=None):
+        connection = self.conn if connection is None else connection
         now = int(time.time())
         skus = list({s.get("sku_code"): s for s in skus if s.get("sku_code")}.values())
-        columns = (
+        text_columns = (
             "sku_code", "product_id", "color", "size", "material", "provider_id",
             "size_id", "color_id", "color_hex", "price", "second_price", "addition_price", "provider_name",
         )
-        rows = pd.DataFrame(
-            [{**{column: s.get(column) for column in columns},
-              "raw_json": json.dumps(s.get("raw_json", {})), "cached_at": now} for s in skus],
-            columns=[*columns, "raw_json", "cached_at"], dtype=object,
-        )
+        fields = (*text_columns, "raw_json")
+        names = ", ".join(fields)
+        values = ", ".join(f"variant.{field}" for field in fields)
+        structure = json.dumps([dict.fromkeys(fields, "VARCHAR")])
+        insert = f"""
+            INSERT INTO skus ({names}, cached_at)
+            SELECT {values}, ?
+            FROM unnest(from_json_strict(?, ?)) AS batch(variant)
+        """
         if transaction:
-            self.conn.execute("BEGIN TRANSACTION")
-        self.conn.execute("DELETE FROM skus")
-        if skus:
-            names = ", ".join(rows.columns)
-            self.conn.register("incoming_skus", rows)
-            try:
-                self.conn.execute(f"INSERT INTO skus ({names}) SELECT {names} FROM incoming_skus")
-            finally:
-                self.conn.unregister("incoming_skus")
+            connection.execute("BEGIN TRANSACTION")
+        connection.execute("DELETE FROM skus")
+        # Only expand a batch of variants at a time while keeping the snapshot atomic.
+        batch_size = 1000
+        for offset in range(0, len(skus), batch_size):
+            batch = skus[offset:offset + batch_size]
+            rows = []
+            for sku in batch:
+                row = {}
+                for field in text_columns:
+                    value = sku.get(field)
+                    row[field] = None if value is None else str(value)
+                row["raw_json"] = json.dumps(sku.get("raw_json", {}))
+                rows.append(row)
+            connection.execute(insert, (now, json.dumps(rows, separators=(",", ":")), structure))
         if transaction:
-            self.conn.execute("COMMIT")
+            connection.execute("COMMIT")
+            self.catalog_ready = self.has_catalog()
         logger.info(f"Seeded {len(skus)} SKUs into DuckDB")
 
-    def seed_providers(self, providers: List[Dict], transaction=True):
+    def seed_providers(self, providers: List[Dict], transaction=True, *, connection=None):
+        connection = self.conn if connection is None else connection
         now = int(time.time())
         providers = list({p.get("id"): p for p in providers if p.get("id")}.values())
         if transaction:
-            self.conn.execute("BEGIN TRANSACTION")
-        self.conn.execute("DELETE FROM providers")
+            connection.execute("BEGIN TRANSACTION")
+        connection.execute("DELETE FROM providers")
         for p in providers:
-            self.conn.execute("""
+            connection.execute("""
                 INSERT INTO providers (
                     id, name, location, countries_served, raw_json, cached_at
                 ) VALUES (?, ?, ?, ?, ?, ?)
@@ -265,7 +299,7 @@ class DuckDBStore:
                 now
             ))
         if transaction:
-            self.conn.execute("COMMIT")
+            connection.execute("COMMIT")
         logger.info(f"Seeded {len(providers)} providers into DuckDB")
 
     def query_products(self, category: str = None, material: str = None, limit: int = 50) -> List[Dict]:
@@ -283,18 +317,7 @@ class DuckDBStore:
             
         query += f" LIMIT {limit}"
         
-        df = self.conn.execute(query, params).fetchdf()
-        
-        results = []
-        for _, row in df.iterrows():
-            item = row.to_dict()
-            item["print_techniques"] = json.loads(item["print_techniques"]) if item.get("print_techniques") else []
-            item["available_sizes"] = json.loads(item["available_sizes"]) if item.get("available_sizes") else []
-            item["available_colors"] = json.loads(item["available_colors"]) if item.get("available_colors") else []
-            item["raw_json"] = json.loads(item["raw_json"]) if item.get("raw_json") else {}
-            results.append(item)
-            
-        return results
+        return _product_rows(self.conn.execute(query, params), decode_raw=True)
 
     def search_products_text(
         self, query_text: str = None, category: str = None, material: str = None, limit: int | None = 15,
@@ -356,16 +379,7 @@ class DuckDBStore:
             query += " LIMIT ?"
             params.append(limit)
 
-        df = self.conn.execute(query, params).fetchdf()
-        results = []
-        for _, row in df.iterrows():
-            item = row.to_dict()
-            item.pop("score", None)
-            item["print_techniques"] = json.loads(item["print_techniques"]) if item.get("print_techniques") else []
-            item["available_sizes"] = json.loads(item["available_sizes"]) if item.get("available_sizes") else []
-            item["available_colors"] = json.loads(item["available_colors"]) if item.get("available_colors") else []
-            results.append(item)
-        return results
+        return _product_rows(self.conn.execute(query, params))
 
     def query_products_by_ids(self, ids: List[str]) -> List[Dict]:
         """Lấy sản phẩm bằng list ID (Dùng cho Hybrid Search sau khi có Top-K)"""
@@ -376,16 +390,7 @@ class DuckDBStore:
         placeholders = ', '.join(['?'] * len(ids))
         query = f"SELECT * FROM products WHERE id IN ({placeholders})"
         
-        df = self.conn.execute(query, ids).fetchdf()
-        
-        results = []
-        for _, row in df.iterrows():
-            item = row.to_dict()
-            item["print_techniques"] = json.loads(item["print_techniques"]) if item.get("print_techniques") else []
-            item["available_sizes"] = json.loads(item["available_sizes"]) if item.get("available_sizes") else []
-            item["available_colors"] = json.loads(item["available_colors"]) if item.get("available_colors") else []
-            item["raw_json"] = json.loads(item["raw_json"]) if item.get("raw_json") else {}
-            results.append(item)
+        results = _product_rows(self.conn.execute(query, ids), decode_raw=True)
             
         # Re-sort to match original ID order from Top-K ranking
         id_to_product = {str(p["id"]): p for p in results}
@@ -394,8 +399,7 @@ class DuckDBStore:
         return sorted_results
 
     def get_skus_for_product(self, product_id: str) -> List[Dict]:
-        df = self.conn.execute("SELECT * FROM skus WHERE product_id = ?", (product_id,)).fetchdf()
-        return [row.to_dict() for _, row in df.iterrows()]
+        return _rows(self.conn.execute("SELECT * FROM skus WHERE product_id = ?", (product_id,)))
 
     def get_skus_by_base_code(self, base_code: str) -> List[Dict]:
         cursor = self.conn.execute(
@@ -404,8 +408,7 @@ class DuckDBStore:
                 ORDER BY color, size, sku_code LIMIT 10""",
             (base_code, base_code),
         )
-        columns = [column[0] for column in cursor.description]
-        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        return _rows(cursor)
 
     def get_product_by_id(self, product_id: str) -> Optional[Dict]:
         if not product_id:
@@ -442,15 +445,7 @@ class DuckDBStore:
 
     def get_all_products_raw(self) -> List[Dict]:
         """Lấy tất cả sản phẩm (dùng để build vector index)"""
-        df = self.conn.execute("SELECT * FROM products").fetchdf()
-        results = []
-        for _, row in df.iterrows():
-            item = row.to_dict()
-            item["print_techniques"] = json.loads(item["print_techniques"]) if item.get("print_techniques") else []
-            item["available_sizes"] = json.loads(item["available_sizes"]) if item.get("available_sizes") else []
-            item["available_colors"] = json.loads(item["available_colors"]) if item.get("available_colors") else []
-            results.append(item)
-        return results
+        return _product_rows(self.conn.execute("SELECT * FROM products"))
 
     def close(self):
         self.conn.close()

@@ -8,6 +8,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 from core.config import settings
 from core.workspace import workspace, current_owner
 from harness.design_validator import fetch_design, validate_design_bytes, MAX_DESIGN_BYTES
@@ -106,7 +107,7 @@ async def products(q: str = '', color: str = '', size: str = '', max_price: floa
             return {'results': []}
         return {'results': [{**exact['product'], 'image_url': exact['product_image_url'],
                              'variants': [exact['sku']], 'currency': 'USD'}]}
-    workspace.event(owner, 'search')
+    await run_in_threadpool(workspace.event, owner, 'search')
     return await search_products({'query': q, 'color': color, 'size': size, 'max_price': max_price})
 
 
@@ -117,7 +118,7 @@ async def sku_info(code: str, owner=Depends(current_owner)):
     result = await get_sku_info({'sku_code': code})
     if result.get('ok'):
         result['availability'] = await BurgerPrintsClient().check_sku_availability([result['sku']['sku_code']])
-        workspace.event(owner, 'sku_selected', result['sku']['sku_code'])
+        await run_in_threadpool(workspace.event, owner, 'sku_selected', result['sku']['sku_code'])
     return result
 
 
@@ -189,7 +190,7 @@ def store_asset(owner, data, name, tags='', previous_id=''):
 async def upload(file: UploadFile, previous_id: str = '', owner=Depends(current_owner)):
     data = await file.read(MAX_DESIGN_BYTES + 1)
     await file.close()
-    return store_asset(owner, data, file.filename or 'Thiết kế', previous_id=previous_id)
+    return await run_in_threadpool(store_asset, owner, data, file.filename or 'Thiết kế', previous_id=previous_id)
 
 
 class ImportFile(BaseModel):
@@ -204,7 +205,7 @@ async def import_file(data: ImportFile, owner=Depends(current_owner)):
         content = await fetch_design(data.url)
     except Exception:
         raise HTTPException(422, 'Link không đọc được. Kiểm tra quyền công khai hoặc tải file trực tiếp.')
-    return store_asset(owner, content, data.name, previous_id=data.previous_id)
+    return await run_in_threadpool(store_asset, owner, content, data.name, previous_id=data.previous_id)
 
 
 class AssetEdit(BaseModel):

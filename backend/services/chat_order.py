@@ -1,6 +1,7 @@
 import unicodedata
 
 from fastapi import HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from core.config import settings
 from services.commerce import review_draft, submit_draft
@@ -113,7 +114,7 @@ async def preview_chat_order(owner, conversation):
     from services.commerce import workspace
 
     try:
-        draft = workspace.get(owner, ident, 'draft')
+        draft = await run_in_threadpool(workspace.get, owner, ident, 'draft')
         review = await review_draft(owner, ident, draft['version'], chat_confirmation=True)
     except HTTPException as error:
         return None, str(error.detail)
@@ -127,7 +128,7 @@ async def confirm_chat_order(owner, conversation):
     from services.commerce import workspace
 
     try:
-        review = workspace.get(owner, reference['id'], 'review')
+        review = await run_in_threadpool(workspace.get, owner, reference['id'], 'review')
         submission = await submit_draft(owner, reference['draft_id'], review['id'], chat_confirmation=True)
     except HTTPException as error:
         return f'**Chưa gửi đơn.** {error.detail} Nhắn **{REVIEW_COMMAND}** sau khi kiểm tra lại.'

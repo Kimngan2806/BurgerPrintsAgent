@@ -40,6 +40,8 @@ http {
         }
         location = /health {
             proxy_pass http://127.0.0.1:8000/health;
+            proxy_connect_timeout 2s;
+            proxy_read_timeout 4s;
         }
         location / {
             proxy_pass http://127.0.0.1:3000;

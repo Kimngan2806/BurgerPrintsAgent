@@ -1,6 +1,7 @@
 import json
 import re
 from decimal import Decimal, InvalidOperation
+from starlette.concurrency import run_in_threadpool
 
 from api.burgerprints import BurgerPrintsClient
 from api.models import OrderAddress, OrderRequest
@@ -365,15 +366,9 @@ async def create_order(args: dict) -> dict:
     return {'ok': False, 'code': 'DRAFT_CONFIRMATION_REQUIRED', 'error': 'Use the workspace review and confirmation flow.'}
 
 
-async def update_draft(args: dict) -> dict:
-    from core.chat_context import owner_context, conversation_context
+def chat_draft(owner, conversation_id):
     from core.workspace import workspace
-    from services.commerce import Address, DraftInput, draft_body
-    from fastapi import HTTPException
-    from pydantic import ValidationError
-    owner, conversation_id = owner_context.get(), conversation_context.get()
-    if not owner or not conversation_id:
-        return {'ok': False, 'error': 'Authentication required.'}
+    from services.commerce import Address, DraftInput
     conversation = workspace.get(owner, conversation_id, 'conversation')
     ident = conversation.get('draft_id')
     if not ident:
@@ -385,6 +380,20 @@ async def update_draft(args: dict) -> dict:
         workspace.update(owner, conversation_id, 'conversation', conversation['version'], body)
     else:
         draft = workspace.get(owner, ident, 'draft')
+    return conversation, draft
+
+
+async def update_draft(args: dict) -> dict:
+    from core.chat_context import owner_context, conversation_context
+    from core.workspace import workspace
+    from services.commerce import DraftInput, draft_body
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+    owner, conversation_id = owner_context.get(), conversation_context.get()
+    if not owner or not conversation_id:
+        return {'ok': False, 'error': 'Authentication required.'}
+    conversation, draft = await run_in_threadpool(chat_draft, owner, conversation_id)
+    ident = draft['id']
     if 'lines' not in args and 'address' not in args:
         return {'ok': True, 'draft': draft}
     try:
@@ -409,7 +418,7 @@ async def update_draft(args: dict) -> dict:
             if sku.casefold() not in current_skus and not any(selection.search(message) for message in seller_messages):
                 return {'ok': False, 'error': f'Vui lòng nhắn lại mã SKU đầy đủ bạn chọn: {sku}.'}
             if line['asset_id']:
-                workspace.get(owner, line['asset_id'], 'asset')
+                await run_in_threadpool(workspace.get, owner, line['asset_id'], 'asset')
         if any(design_urls):
             from routers.workspace import ImportFile, import_file
 
@@ -426,8 +435,8 @@ async def update_draft(args: dict) -> dict:
                         asset = await import_file(ImportFile(url=url, name='Thiết kế mặt trước'), owner=owner)
                         imported_assets[url] = asset['id']
                     line['asset_id'] = imported_assets[url]
-        result = workspace.update(owner, ident, 'draft', data.version, body)
-        workspace.event(owner, 'draft_saved', ident)
+        result = await run_in_threadpool(workspace.update, owner, ident, 'draft', data.version, body)
+        await run_in_threadpool(workspace.event, owner, 'draft_saved', ident)
         return {'ok': True, 'updated': True, 'draft': result,
                 'next': 'Ask for any missing fields. The app displays the review and confirmation instructions when ready.'}
     except HTTPException as exc:

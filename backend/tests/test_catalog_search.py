@@ -1,9 +1,11 @@
 import asyncio
+from threading import Event
 
 import httpx
 
 from agent import tool_handlers
 from api.burgerprints import BurgerPrintsClient
+from cache import sync as catalog_sync
 from cache.duckdb_store import DuckDBStore
 from core.config import settings
 
@@ -67,5 +69,54 @@ def test_white_tshirt_search_filters_skus_before_limiting_products(monkeypatch):
         result = asyncio.run(tool_handlers.search_products(args))["results"]
         assert [item["id"] for item in result] == ["white-tee"]
         assert [variant["sku_code"] for variant in result[0]["variants"]] == ["WHITE-M"]
+    finally:
+        store.close()
+
+
+def test_catalog_refresh_keeps_previous_snapshot_readable_during_write(monkeypatch):
+    monkeypatch.setattr(settings, "DUCKDB_PATH", ":memory:")
+    monkeypatch.setattr(settings, "BURGERPRINTS_API_KEY", "fixture-key")
+    monkeypatch.setattr(catalog_sync, "catalog_sync_status", "not_started")
+    store = DuckDBStore()
+    monkeypatch.setattr(catalog_sync, "db_store", store)
+    old_product = {"id": "OLD", "name": "Previous T-shirt"}
+    old_sku = {"product_id": "OLD", "sku_code": "OLD-M"}
+    new_product = {"id": "NEW", "name": "New T-shirt"}
+    new_sku = {"product_id": "NEW", "sku_code": "NEW-M"}
+
+    async def fetch_snapshot(client, fetch_details=True):
+        return [new_product], [new_sku], []
+
+    monkeypatch.setattr(BurgerPrintsClient, "get_catalog_snapshot", fetch_snapshot)
+
+    async def refresh():
+        loop = asyncio.get_running_loop()
+        writing = asyncio.Event()
+        resume = Event()
+        seed_skus = store.seed_skus
+
+        def pause_writer(*args, **kwargs):
+            loop.call_soon_threadsafe(writing.set)
+            assert resume.wait(5), "The event loop was blocked by catalog writes."
+            return seed_skus(*args, **kwargs)
+
+        monkeypatch.setattr(store, "seed_skus", pause_writer)
+        task = asyncio.create_task(catalog_sync.sync_catalog_to_cache())
+        try:
+            await asyncio.wait_for(writing.wait(), timeout=2)
+            assert store.catalog_ready
+            assert store.get_product_by_id("OLD")["name"] == old_product["name"]
+            assert store.get_product_by_id("NEW") is None
+        finally:
+            resume.set()
+            await task
+
+    try:
+        assert not store.catalog_ready
+        store.replace_snapshot([old_product], [old_sku], [])
+        asyncio.run(refresh())
+        assert catalog_sync.catalog_sync_status == "ready"
+        assert store.get_product_by_id("OLD") is None
+        assert store.get_sku_by_code("NEW-M")["product_id"] == "NEW"
     finally:
         store.close()

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import httpx
@@ -10,11 +11,9 @@ from core.config import settings
 logger = logging.getLogger(__name__)
 catalog_sync_status = 'not_started'
 
+
 async def sync_catalog_to_cache(rebuild_search_index_fn=None):
-    """
-    Kéo data từ BurgerPrints API và lưu vào DuckDB.
-    Được gọi lúc startup.
-    """
+    """Fetch the BurgerPrints catalog and replace the local snapshot."""
     global catalog_sync_status
     logger.info("Starting catalog sync from API to DuckDB...")
     client = BurgerPrintsClient()
@@ -25,16 +24,23 @@ async def sync_catalog_to_cache(rebuild_search_index_fn=None):
     
     catalog_sync_status = 'syncing'
     try:
-        # 1. Fetch stable catalog data from BurgerPrints /product endpoints.
         products_dict, skus_dict, providers = await client.get_catalog_snapshot(fetch_details=True)
-        
-        # 3. Seed DuckDB
-        db_store.replace_snapshot(products_dict, skus_dict, providers)
+
+        writer = asyncio.create_task(asyncio.to_thread(db_store.replace_snapshot, products_dict, skus_dict, providers))
+        try:
+            await asyncio.shield(writer)
+        except asyncio.CancelledError:
+            # Wait for the transaction to finish before the app closes the database.
+            try:
+                await writer
+            except Exception:
+                logger.exception("Catalog snapshot failed while shutting down.")
+            raise
+
         catalog_sync_status = 'ready'
         
         logger.info("Catalog sync completed successfully.")
         
-        # 4. Rebuild Hybrid Search Index
         if rebuild_search_index_fn:
             logger.info("Rebuilding search index...")
             all_products = db_store.get_all_products_raw()
@@ -48,5 +54,5 @@ async def sync_catalog_to_cache(rebuild_search_index_fn=None):
         catalog_sync_status = 'upstream_timeout' if isinstance(e, httpx.TimeoutException) else 'upstream_unreachable'
         logger.warning('Could not reach BurgerPrints catalog: %s', type(e).__name__)
     except Exception as e:
-        catalog_sync_status = 'invalid_snapshot' if not db_store.has_catalog() else 'ready'
+        catalog_sync_status = 'ready' if db_store.catalog_ready else 'invalid_snapshot'
         logger.error(f"Failed to sync catalog: {e}")
