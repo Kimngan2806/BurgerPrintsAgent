@@ -2,6 +2,7 @@ import asyncio
 import json
 import secrets
 import time
+from importlib import import_module
 import anyio
 from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
@@ -66,7 +67,6 @@ def release_chat(session_id, lease):
 
 
 async def stream(owner, request, lease):
-    from agent.gemini_agent import process_chat
     tokens = [owner_context.set(owner), conversation_context.set(request.session_id), tool_events.set([])]
     content, failed = '', False
     review_changed, chat_review = False, None
@@ -86,8 +86,9 @@ async def stream(owner, request, lease):
                 content = ASK_SKU
                 yield {'data': json.dumps({'text': content})}
             else:
+                agent = await run_in_threadpool(import_module, 'agent.gemini_agent')
                 order_reply = None
-                async for event in process_chat(request.session_id, request.message):
+                async for event in agent.process_chat(request.session_id, request.message):
                     if event.get('data') == '[DONE]':
                         continue
                     data = json.loads(event['data'])

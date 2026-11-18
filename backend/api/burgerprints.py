@@ -1,6 +1,7 @@
 import httpx
 import asyncio
 import logging
+import os
 import re
 import time
 import unicodedata
@@ -136,37 +137,20 @@ class BurgerPrintsClient:
         conflicting_codes: set[str] = set()
         providers_by_id: Dict[str, Dict[str, Any]] = {}
 
-        async with httpx.AsyncClient(timeout=max(self.timeout, 20.0)) as client:
-            semaphore = asyncio.Semaphore(6)
-
-            async def fetch_detail(product: Dict[str, Any]) -> Dict[str, Any]:
-                short_code = product.get("id")
-                if not short_code or not settings.BURGERPRINTS_API_KEY:
-                    return product
-                async with semaphore:
-                    try:
-                        url = f"{self.base_url}/product/{short_code}"
-                        async def read():
-                            response = await client.get(url, headers=self.headers)
-                            return response.raise_for_status().json()
-
-                        detail = (await _retry_catalog_read(read)).get("data") or {}
-                        return self._normalize_product({**product["raw_json"], **detail}) if detail else product
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch product detail {short_code}: {e}")
-                        raise
-
-            # Pagination can repeat the same list row. Fetch each endpoint once.
-            unique_bases = {p["id"]: p for p in products if p["id"]}
-            product_details = await asyncio.gather(*(fetch_detail(p) for p in unique_bases.values()))
-
-        for product in product_details:
+        def add_product(product: Dict[str, Any]) -> None:
             product_id = product["id"]
             if not product_id:
-                continue
+                return
+            variations = product.pop("variations", [])
             # Multiple list entries can resolve to the same canonical product.
-            products_by_id.setdefault(product_id, product)
-            for variation in product.get("variations", []):
+            if product_id not in products_by_id:
+                # Variants already have their own SKU rows. Keep product-level metadata
+                # such as images and design requirements without serializing them twice.
+                product["raw_json"] = {
+                    key: value for key, value in product["raw_json"].items() if key != "variations"
+                }
+                products_by_id[product_id] = product
+            for variation in variations:
                 sku_code = (variation.get("sku") or "").strip()
                 sku_key = sku_code.upper()
                 if not sku_key or sku_key in conflicting_codes:
@@ -201,7 +185,37 @@ class BurgerPrintsClient:
                     conflicting_codes.add(sku_key)
                     del skus_by_code[sku_key]
                     continue
-                skus_by_code.setdefault(sku_key, {**sku, "raw_json": variation})
+                if previous is None:
+                    sku["raw_json"] = variation
+                    skus_by_code[sku_key] = sku
+
+        # Pagination can repeat a list row. Fetch each detail once and apply only
+        # a small batch at a time, retaining the order used to choose canonical data.
+        products = list({p["id"]: p for p in products if p["id"]}.values())
+        concurrency = 2 if os.environ.get("RENDER") == "true" else 6
+        async with httpx.AsyncClient(timeout=max(self.timeout, 20.0)) as client:
+            async def fetch_detail(product: Dict[str, Any]) -> Dict[str, Any]:
+                if not settings.BURGERPRINTS_API_KEY:
+                    return product
+                short_code = product["id"]
+                url = f"{self.base_url}/product/{short_code}"
+
+                async def read():
+                    response = await client.get(url, headers=self.headers)
+                    return response.raise_for_status().json()
+
+                try:
+                    detail = (await _retry_catalog_read(read)).get("data") or {}
+                    return self._normalize_product({**product["raw_json"], **detail}) if detail else product
+                except Exception as error:
+                    logger.warning("Failed to fetch product detail %s: %s", short_code, type(error).__name__)
+                    raise
+
+            for offset in range(0, len(products), concurrency):
+                batch = products[offset:offset + concurrency]
+                for product in await asyncio.gather(*(fetch_detail(base) for base in batch)):
+                    add_product(product)
+                    await asyncio.sleep(0)
 
         logger.info(
             "Prepared catalog snapshot: %s products, %s SKUs, %s conflicting SKU codes excluded.",

@@ -1,10 +1,9 @@
-from google.generativeai.types import FunctionDeclaration, Tool
-import json
+"""Provider-neutral JSON Schema declarations for the agent's tools."""
 
 # =======================================================
 # 1. search_products
 # =======================================================
-search_products_func = FunctionDeclaration(
+search_products_func = dict(
     name="search_products",
     description="Tìm sản phẩm và SKU trong catalog. Truyền tên hoặc loại sản phẩm vào query, màu vào color, size vào size và giá gốc tối đa vào max_price. Ví dụ áo thun trắng: query='t-shirt', color='White'. Công cụ không kiểm tra tồn kho hoặc thời gian giao hàng.",
     parameters={
@@ -33,7 +32,7 @@ search_products_func = FunctionDeclaration(
 # =======================================================
 # 2. get_sku_info
 # =======================================================
-get_sku_info_func = FunctionDeclaration(
+get_sku_info_func = dict(
     name="get_sku_info",
     description="Tra mã SKU hoặc mã dòng sản phẩm. Nếu người dùng nhập mã dòng, kết quả SKU_VARIANT_REQUIRED chứa các SKU đầy đủ để họ chọn.",
     parameters={
@@ -54,7 +53,7 @@ get_sku_info_func = FunctionDeclaration(
 # =======================================================
 # 3. get_base_cost
 # =======================================================
-get_base_cost_func = FunctionDeclaration(
+get_base_cost_func = dict(
     name="get_base_cost",
     description="[REALTIME] Láº¥y giÃ¡ sáº£n xuáº¥t (base cost) cáº­p nháº­t nháº¥t cá»§a má»™t hoáº·c nhiá»u SKU codes. LuÃ´n gá»i hÃ m nÃ y Ä‘á»ƒ bÃ¡o giÃ¡ chÃ­nh xÃ¡c, khÃ´ng Ä‘Æ°á»£c Ä‘oÃ¡n.",
     parameters={
@@ -73,7 +72,7 @@ get_base_cost_func = FunctionDeclaration(
 # =======================================================
 # 4. get_shipping_cost
 # =======================================================
-get_shipping_cost_func = FunctionDeclaration(
+get_shipping_cost_func = dict(
     name="get_shipping_cost",
     description="[REALTIME] Láº¥y phÃ­ váº­n chuyá»ƒn cáº­p nháº­t nháº¥t cá»§a SKU Ä‘áº¿n má»™t quá»‘c gia cá»¥ thá»ƒ.",
     parameters={
@@ -96,7 +95,7 @@ get_shipping_cost_func = FunctionDeclaration(
 # =======================================================
 # 5. get_production_time
 # =======================================================
-get_production_time_func = FunctionDeclaration(
+get_production_time_func = dict(
     name="get_production_time",
     description="[REALTIME] Láº¥y thá»i gian sáº£n xuáº¥t Æ°á»›c tÃ­nh hiá»‡n táº¡i cá»§a SKU.",
     parameters={
@@ -115,7 +114,7 @@ get_production_time_func = FunctionDeclaration(
 # =======================================================
 # 6. get_shipping_time
 # =======================================================
-get_shipping_time_func = FunctionDeclaration(
+get_shipping_time_func = dict(
     name="get_shipping_time",
     description="[REALTIME] Láº¥y thá»i gian váº­n chuyá»ƒn Æ°á»›c tÃ­nh cá»§a SKU Ä‘áº¿n quá»‘c gia Ä‘Ã­ch.",
     parameters={
@@ -138,7 +137,7 @@ get_shipping_time_func = FunctionDeclaration(
 # =======================================================
 # 7. check_sku_availability
 # =======================================================
-check_sku_availability_func = FunctionDeclaration(
+check_sku_availability_func = dict(
     name="check_sku_availability",
     description="[REALTIME] Kiá»ƒm tra tráº¡ng thÃ¡i tá»“n kho vÃ  hoáº¡t Ä‘á»™ng cá»§a SKU (active, inactive, discontinued). KhÃ´ng Ä‘Æ°á»£c recommend SKU inactive.",
     parameters={
@@ -157,7 +156,7 @@ check_sku_availability_func = FunctionDeclaration(
 # =======================================================
 # 8. check_provider_status
 # =======================================================
-check_provider_status_func = FunctionDeclaration(
+check_provider_status_func = dict(
     name="check_provider_status",
     description="[REALTIME] Kiá»ƒm tra tráº¡ng thÃ¡i cá»§a xÆ°á»Ÿng (active, overload, maintenance). KhÃ´ng Ä‘Æ°á»£c recommend xÆ°á»Ÿng overload/maintenance.",
     parameters={
@@ -176,7 +175,7 @@ check_provider_status_func = FunctionDeclaration(
 # =======================================================
 # 9. check_region_support
 # =======================================================
-check_region_support_func = FunctionDeclaration(
+check_region_support_func = dict(
     name="check_region_support",
     description="[REALTIME] Kiá»ƒm tra xem SKU cÃ³ há»— trá»£ váº­n chuyá»ƒn Ä‘áº¿n quá»‘c gia Ä‘Ã­ch hay khÃ´ng (True/False).",
     parameters={
@@ -199,7 +198,7 @@ check_region_support_func = FunctionDeclaration(
 # =======================================================
 # 10. prepare_order_review
 # =======================================================
-prepare_order_review_func = FunctionDeclaration(
+prepare_order_review_func = dict(
     name="prepare_order_review",
     description="Bat buoc goi truoc khi yeu cau user xac nhan dat hang. Tool nay tao ban tom tat SKU, quantity, destination, gia, design; validate design_url_front; va tra order_review_token de create_order duoc phep chay.",
     parameters={
@@ -229,7 +228,7 @@ prepare_order_review_func = FunctionDeclaration(
 # =======================================================
 # 11. create_order
 # =======================================================
-create_order_func = FunctionDeclaration(
+create_order_func = dict(
     name="create_order",
     description="Táº¡o Ä‘Æ¡n hÃ ng fulfillment má»›i. Báº®T BUá»˜C: KhÃ´ng bao giá» thu tháº­p Ä‘á»‹a chá»‰ ngÆ°á»i nháº­n náº¿u chÆ°a gá»i tool check_sku_availability Ä‘á»ƒ Ä‘áº£m báº£o SKU tá»“n táº¡i. CHá»ˆ Gá»ŒI khi ngÆ°á»i dÃ¹ng gÃµ cÃ¢u lá»‡nh cÃ³ chá»©a chá»¯ 'xÃ¡c nháº­n'. Báº®T BUá»˜C pháº£i cÃ³ design_url_front lÃ  link áº£nh public http/https má»Ÿ Ä‘Æ°á»£c trÃªn internet, vÃ­ dá»¥ https://domain.com/design.png hoáº·c .jpg. KhÃ´ng dÃ¹ng file local, localhost, private Google Drive link, hoáº·c placeholder. Tuyá»‡t Ä‘á»‘i khÃ´ng tá»± chá»n ngáº«u nhiÃªn.",
     parameters={
@@ -267,38 +266,35 @@ create_order_func = FunctionDeclaration(
     }
 )
 
-get_order_creation_status_func = FunctionDeclaration(
+get_order_creation_status_func = dict(
     name="get_order_creation_status",
     description="Kiá»ƒm tra tráº¡ng thÃ¡i báº­t/táº¯t hiá»‡n táº¡i cá»§a tÃ­nh nÄƒng táº¡o Ä‘Æ¡n tá»« Harness. Pháº£i gá»i tool nÃ y thay vÃ¬ tá»± suy Ä‘oÃ¡n tráº¡ng thÃ¡i.",
-    parameters={"type": "object", "properties": {}}
+    parameters={"type": "object"}
 )
 
-# Group all tools into a single Tool object
-agent_tools = Tool(
-    function_declarations=[
-        search_products_func,
-        FunctionDeclaration(name='calculate_profit', description='Calculate an estimated profit scenario with exact decimal arithmetic. All fees other than production_per_item are totals for the order. Omit unknown costs, never assume zero.', parameters={
-            'type': 'object', 'properties': {
-                **{k: {'type': 'number'} for k in ['sale_price', 'discount_percent', 'production_per_item', 'shipping_total', 'platform_total', 'other_total']},
-                'quantity': {'type': 'integer'}}, 'required': ['sale_price']}),
-        FunctionDeclaration(name='update_draft', description='Đọc đơn nháp với tham số rỗng. Khi sửa, gửi version hiện tại, toàn bộ lines nếu đổi sản phẩm và chỉ các trường address người dùng vừa cung cấp. Chỉ gắn URL thiết kế do người dùng gửi. Không dùng công cụ để xác nhận hoặc gửi đơn.', parameters={
-            'type': 'object', 'properties': {
-                'version': {'type': 'integer'},
-                'lines': {'type': 'array', 'items': {'type': 'object', 'properties': {
-                    'sku': {'type': 'string'}, 'quantity': {'type': 'integer'},
-                    'asset_id': {'type': 'string'}, 'position': {'type': 'string'},
-                    'design_url_front': {'type': 'string', 'description': 'URL ảnh công khai chính xác do người dùng gửi cho dòng SKU này.'}},
-                    'required': ['sku', 'quantity']}},
-                'address': {'type': 'object', 'properties': {key: {'type': 'string'} for key in ['name', 'street', 'city', 'state', 'zip', 'country', 'email', 'phone']}}
-            }}),
-        get_sku_info_func,
-        get_base_cost_func,
-        get_shipping_cost_func,
-        get_production_time_func,
-        get_shipping_time_func,
-        check_sku_availability_func,
-        check_provider_status_func,
-        check_region_support_func,
-        get_order_creation_status_func,
-    ]
-)
+TOOL_DECLARATIONS = [
+    search_products_func,
+    dict(name='calculate_profit', description='Calculate an estimated profit scenario with exact decimal arithmetic. All fees other than production_per_item are totals for the order. Omit unknown costs, never assume zero.', parameters={
+        'type': 'object', 'properties': {
+            **{k: {'type': 'number'} for k in ['sale_price', 'discount_percent', 'production_per_item', 'shipping_total', 'platform_total', 'other_total']},
+            'quantity': {'type': 'integer'}}, 'required': ['sale_price']}),
+    dict(name='update_draft', description='Đọc đơn nháp với tham số rỗng. Khi sửa, gửi version hiện tại, toàn bộ lines nếu đổi sản phẩm và chỉ các trường address người dùng vừa cung cấp. Chỉ gắn URL thiết kế do người dùng gửi. Không dùng công cụ để xác nhận hoặc gửi đơn.', parameters={
+        'type': 'object', 'properties': {
+            'version': {'type': 'integer'},
+            'lines': {'type': 'array', 'items': {'type': 'object', 'properties': {
+                'sku': {'type': 'string'}, 'quantity': {'type': 'integer'},
+                'asset_id': {'type': 'string'}, 'position': {'type': 'string'},
+                'design_url_front': {'type': 'string', 'description': 'URL ảnh công khai chính xác do người dùng gửi cho dòng SKU này.'}},
+                'required': ['sku', 'quantity']}},
+            'address': {'type': 'object', 'properties': {key: {'type': 'string'} for key in ['name', 'street', 'city', 'state', 'zip', 'country', 'email', 'phone']}}
+        }}),
+    get_sku_info_func,
+    get_base_cost_func,
+    get_shipping_cost_func,
+    get_production_time_func,
+    get_shipping_time_func,
+    check_sku_availability_func,
+    check_provider_status_func,
+    check_region_support_func,
+    get_order_creation_status_func,
+]

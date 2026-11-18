@@ -3,7 +3,6 @@ import json
 import logging
 import unicodedata
 from contextlib import nullcontext
-from google.genai import errors as google_errors
 from starlette.concurrency import run_in_threadpool
 
 from core.config import settings
@@ -17,7 +16,6 @@ from core.session import session_manager
 from agent.byteplus_agent import BytePlusChatSession
 from agent.openrouter_agent import OpenRouterChatSession
 from agent.vietcod_agent import VietCodChatSession
-from agent.vertex_agent import GeminiChatSession, VertexChatSession
 from harness.default_tools import tool_registry
 from harness.tool_executor import ToolExecutor
 
@@ -70,13 +68,22 @@ def is_waiting_placeholder(text: str) -> bool:
     )
 
 
-def normalize_error_message(error: Exception) -> str:
+def normalize_error_message(error: Exception, provider: str) -> str:
     message = str(error)
-    if isinstance(error, google_errors.ServerError) and error.code == 503:
-        return "Gemini đang quá tải. Bạn thử gửi lại tin nhắn sau ít phút nhé."
+    if provider in {"gemini", "vertex"}:
+        from google.genai.errors import ServerError
+
+        if isinstance(error, ServerError) and error.code == 503:
+            return "Gemini đang quá tải. Bạn thử gửi lại tin nhắn sau ít phút nhé."
     if "429" in message and "quota" in message.lower():
         return "Gemini API đã hết quota tạm thời. Vui lòng thử lại sau hoặc đổi API key khác."
     return message
+
+
+def google_session_type(provider: str):
+    from agent.vertex_agent import GeminiChatSession, VertexChatSession
+
+    return VertexChatSession if provider == "vertex" else GeminiChatSession
 
 
 def user_explicitly_confirmed_sku(message: str, sku: str) -> bool:
@@ -162,24 +169,25 @@ async def process_chat(session_id: str, message: str):
             yield {'data': '[DONE]'}
             return
     provider = settings.PRIMARY_MODEL_PROVIDER.lower()
-    if provider == "vertex":
-        session_type = VertexChatSession
-    elif provider == "openrouter":
+    if provider == "openrouter":
         session_type = OpenRouterChatSession
     elif provider == "vietcod":
         session_type = VietCodChatSession
     elif provider == "byteplus" and settings.SEEDANCE_API_KEY:
         session_type = BytePlusChatSession
     else:
-        session_type = GeminiChatSession
+        provider = "vertex" if provider == "vertex" else "gemini"
+        session_type = await run_in_threadpool(google_session_type, provider)
 
-    async for event in process_chat_provider(session_id, message, sess_data, session_type, language, model_context):
+    async for event in process_chat_provider(session_id, message, sess_data, session_type, language, model_context,
+                                             provider=provider):
         yield event
 
 
-async def process_chat_provider(session_id: str, message: str, sess_data: dict, session_type, language, model_context):
+async def process_chat_provider(session_id: str, message: str, sess_data: dict, session_type, language, model_context,
+                                *, provider: str):
     try:
-        supports_tool_limit = session_type in (GeminiChatSession, OpenRouterChatSession, VietCodChatSession)
+        supports_tool_limit = provider in {"gemini", "openrouter", "vietcod"}
         chat = sess_data["chat_session"]
         if not isinstance(chat, session_type):
             chat = session_type()
@@ -191,7 +199,7 @@ async def process_chat_provider(session_id: str, message: str, sess_data: dict, 
         ) if part)
 
         response = await chat.send_user_message(model_message)
-        if session_type is GeminiChatSession and not response["tool_calls"] and is_waiting_placeholder(response["text"]):
+        if provider == "gemini" and not response["tool_calls"] and is_waiting_placeholder(response["text"]):
             response = await chat.send_user_message(
                 "Hãy gọi công cụ ngay nếu cần tra sản phẩm hoặc SKU. "
                 "Trả kết quả trong cùng lượt, hoặc hỏi thông tin còn thiếu."
@@ -244,17 +252,19 @@ async def process_chat_provider(session_id: str, message: str, sess_data: dict, 
     except Exception as e:
         logger.error("Error in primary provider %s: %s", session_type.__name__, e)
         if (
-            session_type is VertexChatSession
+            provider == "vertex"
             and settings.FALLBACK_MODEL_PROVIDER.lower() == "byteplus"
             and settings.SEEDANCE_API_KEY
         ):
             logger.warning("Falling back from Vertex to BytePlus Seed.")
             fallback_session = BytePlusChatSession()
             session_manager.set_chat_session(session_id, fallback_session)
-            async for event in process_chat_provider(session_id, message, sess_data, BytePlusChatSession, language, model_context):
+            async for event in process_chat_provider(
+                session_id, message, sess_data, BytePlusChatSession, language, model_context, provider="byteplus",
+            ):
                 yield event
             return
-        if session_type is VertexChatSession and settings.FALLBACK_MODEL_PROVIDER.lower() == "byteplus":
+        if provider == "vertex" and settings.FALLBACK_MODEL_PROVIDER.lower() == "byteplus":
             logger.warning("BytePlus fallback is configured but SEEDANCE_API_KEY is missing; skipping fallback.")
-        yield {"data": json.dumps({"error": normalize_error_message(e)})}
+        yield {"data": json.dumps({"error": normalize_error_message(e, provider)})}
         yield {"data": "[DONE]"}

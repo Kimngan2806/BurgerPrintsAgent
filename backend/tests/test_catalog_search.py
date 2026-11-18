@@ -24,11 +24,16 @@ def test_catalog_sync_collapses_aliases_and_excludes_conflicting_skus(monkeypatc
                 {"short_code": "ALIAS", "name": "Cotton T-Shirt"},
                 {"short_code": "TEE", "name": "Cotton T-Shirt"},
             ]}})
-        return httpx.Response(200, json={"data": {"short_code": "TEE", "variations": [
-            {"sku": "TEE-WHITE-M" if code == "TEE" else "tee-white-m", "color": "White", "size": "M"},
-            {"sku": "TEE-CONFLICT", "color": "White" if code == "TEE" else "Black"},
-            {"sku": ""},
-        ]}})
+        return httpx.Response(200, json={"data": {
+            "short_code": "TEE",
+            "thumbnail": "https://example.com/tee.png",
+            "variations": [
+                {"sku": "TEE-WHITE-M" if code == "TEE" else "tee-white-m", "color": "White", "size": "M",
+                 "price": "7.70", "print_area": "front"},
+                {"sku": "TEE-CONFLICT", "color": "White" if code == "TEE" else "Black"},
+                {"sku": ""},
+            ],
+        }})
 
     client_type = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: client_type(transport=httpx.MockTransport(respond), **kwargs))
@@ -36,6 +41,10 @@ def test_catalog_sync_collapses_aliases_and_excludes_conflicting_skus(monkeypatc
     assert seen == ["product", "TEE", "ALIAS"]
     assert [product["id"] for product in products] == ["TEE"]
     assert [sku["sku_code"] for sku in skus] == ["TEE-WHITE-M"]
+    assert "variations" not in products[0]["raw_json"]
+    assert products[0]["raw_json"]["thumbnail"] == "https://example.com/tee.png"
+    assert skus[0]["price"] == "7.70"
+    assert skus[0]["raw_json"]["print_area"] == "front"
     monkeypatch.setattr(settings, "DUCKDB_PATH", ":memory:")
     store = DuckDBStore()
     try:

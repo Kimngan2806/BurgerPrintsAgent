@@ -1,68 +1,16 @@
 import json
+from copy import deepcopy
 from typing import Any, Dict, List
 
 import httpx
-from google.protobuf.json_format import MessageToDict
 
 from agent.prompts import SYSTEM_PROMPT
-from agent.tools import agent_tools
+from agent.tools import TOOL_DECLARATIONS
 from core.config import settings
 
 
-def _schema_to_dict(value: Any) -> Dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if hasattr(value, "to_dict"):
-        return value.to_dict()
-    if hasattr(value, "type_"):
-        return _gemini_schema_to_json_schema(value)
-    if hasattr(value, "DESCRIPTOR"):
-        return MessageToDict(value, preserving_proto_field_name=True)
-    raise TypeError(f"Unsupported tool schema type: {type(value).__name__}")
-
-
-def _gemini_schema_to_json_schema(schema: Any) -> Dict[str, Any]:
-    type_name = getattr(getattr(schema, "type_", None), "name", str(getattr(schema, "type_", ""))).lower()
-    type_map = {
-        "object": "object",
-        "string": "string",
-        "array": "array",
-        "integer": "integer",
-        "number": "number",
-        "boolean": "boolean",
-    }
-    output: Dict[str, Any] = {"type": type_map.get(type_name, type_name or "object")}
-    if getattr(schema, "description", ""):
-        output["description"] = schema.description
-    if getattr(schema, "enum", None):
-        output["enum"] = list(schema.enum)
-    if getattr(schema, "required", None):
-        output["required"] = list(schema.required)
-    if getattr(schema, "properties", None):
-        output["properties"] = {
-            key: _gemini_schema_to_json_schema(value)
-            for key, value in schema.properties.items()
-        }
-    if getattr(schema, "items", None):
-        output["items"] = _gemini_schema_to_json_schema(schema.items)
-    return output
-
-
 def build_openai_tools() -> List[Dict[str, Any]]:
-    declarations = getattr(agent_tools, "function_declarations", [])
-    tools = []
-    for declaration in declarations:
-        tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": declaration.name,
-                    "description": declaration.description,
-                    "parameters": _schema_to_dict(declaration.parameters),
-                },
-            }
-        )
-    return tools
+    return [{"type": "function", "function": deepcopy(tool)} for tool in TOOL_DECLARATIONS]
 
 
 class OpenAICompatibleChatSession:

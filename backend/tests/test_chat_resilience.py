@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from threading import Event
 
 import anyio
@@ -15,6 +16,8 @@ from routers import chat
 def test_slow_chat_storage_leaves_health_responsive(tmp_path, monkeypatch):
     workspace = Workspace(tmp_path / 'workspace.db')
     monkeypatch.setattr(chat, 'workspace', workspace)
+    # The deterministic order opener works without importing the model agent.
+    monkeypatch.setitem(sys.modules, 'agent.gemini_agent', None)
     owner = 'seller-id'
     conversation = workspace.create(owner, 'conversation', {'messages': []})
     waiting, resume, storage_timed_out = Event(), Event(), Event()
