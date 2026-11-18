@@ -13,3 +13,4 @@ sse-starlette==2.2.1
 pandas==2.2.3
 Pillow==11.1.0
 python-multipart==0.0.20
+psycopg[binary]==3.3.9

@@ -24,6 +24,7 @@ Có thể dùng file `render.yaml` tại thư mục gốc để tạo cùng cấ
 PRIMARY_MODEL_PROVIDER=gemini
 COOKIE_SECURE=true
 STORE_DISPLAY_NAME=BurgerPrints Demo
+WORKSPACE_DATABASE_URL=postgresql://...
 WORKSPACE_DB_PATH=/app/data/workspace.sqlite3
 DUCKDB_PATH=/app/data/catalog.duckdb
 FILE_STORAGE_PATH=/app/data/designs
@@ -35,6 +36,8 @@ ENABLE_ORDER_SUBMISSION=false
 ```
 
 `deploy/start.py` tự lấy `RENDER_EXTERNAL_URL` để đặt `PUBLIC_FILE_BASE_URL` và CORS nếu chưa đặt riêng. Khi dùng custom domain, cấu hình hai giá trị này thành URL HTTPS của domain đó.
+
+Để giữ tài khoản và lịch sử chat qua các lần khởi động lại, tạo PostgreSQL (chẳng hạn [Neon Free](https://neon.com/docs/guides/render)) rồi đặt URL kết nối đầy đủ, gồm `sslmode=require`, vào `WORKSPACE_DATABASE_URL` trong **Environment** của dịch vụ Render. Khi đã cấu hình URL, ứng dụng tạo bảng trong PostgreSQL lúc khởi động và lưu tài khoản, phiên đăng nhập, hội thoại và đơn nháp ở đó. Với URL trống, ứng dụng dùng SQLite tại `WORKSPACE_DB_PATH`. Chuỗi kết nối chứa mật khẩu và chỉ nên lưu trong biến môi trường.
 
 Không cần nhập API key để build, mở giao diện, đăng ký tài khoản ứng dụng, lưu đơn nháp trống và dùng công cụ tính kịch bản. Phần trả lời AI cần key của model; catalog BurgerPrints cần key của store. Thêm key sau tại **Environment → Add Environment Variable**, lưu và redeploy:
 
@@ -49,16 +52,17 @@ Nếu dùng BytePlus: đặt `PRIMARY_MODEL_PROVIDER=byteplus`, `SEEDANCE_API_KE
 
 ## Giới hạn đã chọn cho demo Free
 
-Theo [Render Free](https://render.com/docs/free), dịch vụ có thể ngủ sau 15 phút không hoạt động; khi restart, redeploy hoặc ngủ, thay đổi filesystem có thể bị mất. Vì SQLite, catalog và file upload đang nằm ở filesystem, tài khoản/lịch sử/đơn nháp/file của demo có thể mất. Không bật tạo đơn thật hoặc dùng demo này làm nơi lưu giao dịch cần giữ lâu dài.
+Theo [Render Free](https://render.com/docs/free), dịch vụ có thể ngủ sau 15 phút không hoạt động và mất thay đổi trên ổ đĩa khi khởi động lại. Catalog DuckDB và nội dung file thiết kế đã tải lên vẫn nằm trên ổ đĩa. Dữ liệu đã bị Render xóa trước khi kết nối PostgreSQL cần bản sao lưu để khôi phục.
 
 Bản Render dùng `requirements-runtime.txt`, không nạp Torch/SentenceTransformer/FAISS; tìm kiếm sử dụng DuckDB. Khi muốn dùng vector index, cần image chứa bộ requirements đầy đủ và dung lượng RAM phù hợp.
 
 ## Kiểm tra sau deploy
 
-1. `/health` trả HTTP 200.
+1. `/health` trả HTTP 200 và `workspace_storage` là `postgresql` nếu đã đặt URL.
 2. Trang gốc hiển thị đăng nhập/đăng ký.
 3. Đăng ký tài khoản thử, mở trang làm việc và tạo đơn nháp.
 4. Có API key: xác nhận log sync catalog thành công, thử một câu chat và kiểm tra stream.
-5. Giữ `ENABLE_ORDER_SUBMISSION=false` cho demo giao diện. Để thử giao dịch, chuyển sang lưu trữ bền vững và nghiệm thu luồng sandbox trước.
+5. Khởi động lại dịch vụ, đăng nhập với cùng tài khoản thử và mở lại hội thoại từ lịch sử.
+6. Giữ `ENABLE_ORDER_SUBMISSION=false` cho demo giao diện. Để thử giao dịch, dùng PostgreSQL và nghiệm thu luồng sandbox trước.
 
 Không có Docker daemon trong môi trường Windows chuẩn bị repo này. Build frontend, kiểm thử backend và kiểm tra file cấu hình được chạy tại máy; việc build/run Linux Docker được xác nhận qua lần deploy Render thực tế.

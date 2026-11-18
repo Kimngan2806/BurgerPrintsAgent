@@ -169,8 +169,7 @@ async def submit_draft(owner, ident, review_id, *, chat_confirmation=False):
         payload['shipping_phone'] = address['phone']
     callback_token = secrets.token_urlsafe(32)
     payload['callback_url'] = settings.PUBLIC_FILE_BASE_URL.rstrip('/') + '/api/callbacks/' + reference + '/' + callback_token
-    with workspace.connect() as db:
-        db.execute('BEGIN IMMEDIATE')
+    with workspace.connect(lock=f'draft:{ident}') as db:
         row = db.execute('SELECT version FROM documents WHERE id=? AND owner=? AND kind=?',
                          (ident, owner, 'draft')).fetchone()
         if not row or row['version'] != review['draft_version']:

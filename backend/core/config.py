@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     BUILD_SEARCH_INDEX_ON_STARTUP: bool = False
     DUCKDB_PATH: str = "catalog.duckdb"
     WORKSPACE_DB_PATH: str = "data/workspace.sqlite3"
+    WORKSPACE_DATABASE_URL: str = ""
     FILE_STORAGE_PATH: str = "data/designs"
     PUBLIC_FILE_BASE_URL: str = ""
     STORE_DISPLAY_NAME: str = "Store demo cấu hình trên máy chủ"

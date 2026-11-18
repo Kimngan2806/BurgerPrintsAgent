@@ -17,7 +17,7 @@ from core.feature_flags import ff_manager
 from routers.chat import router as chat_router
 from routers.catalog_debug import router as catalog_debug_router
 from routers.workspace import router as workspace_router
-from core.workspace import current_owner
+from core.workspace import current_owner, workspace
 from fastapi import Depends
 
 # Cấu hình logging
@@ -92,6 +92,7 @@ app.include_router(workspace_router, prefix="/api", tags=["Workspace"])
 async def health_check():
     payload = {
         "status": "ok", 
+        "workspace_storage": workspace.backend,
         "search_ready": True,
         "catalog_ready": db_store.has_catalog(),
         "catalog_sync_status": catalog_sync.catalog_sync_status,

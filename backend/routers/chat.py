@@ -18,9 +18,7 @@ router = APIRouter()
 def start_chat(owner, request):
     workspace.get(owner, request.session_id, 'conversation')
     lease = secrets.token_hex(16)
-    with workspace.connect() as db:
-        db.execute('CREATE TABLE IF NOT EXISTS chat_leases(id TEXT PRIMARY KEY, token TEXT, expires REAL)')
-        db.execute('BEGIN IMMEDIATE')
+    with workspace.connect(lock=f'chat-lease:{request.session_id}') as db:
         db.execute('DELETE FROM chat_leases WHERE expires<?', (time.time(),))
         if db.execute('SELECT 1 FROM chat_leases WHERE id=?', (request.session_id,)).fetchone():
             raise HTTPException(409, 'Phiên chat đang trả lời ở tab khác. Đợi hoàn tất rồi thử lại.')

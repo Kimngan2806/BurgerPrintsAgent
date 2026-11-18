@@ -7,6 +7,7 @@ _test_root = tempfile.TemporaryDirectory(prefix='burgerprints-tests-')
 root = Path(_test_root.name)
 os.environ['DUCKDB_PATH'] = str(root / 'catalog.duckdb')
 os.environ['WORKSPACE_DB_PATH'] = str(root / 'workspace.sqlite3')
+os.environ['WORKSPACE_DATABASE_URL'] = ''
 os.environ['FILE_STORAGE_PATH'] = str(root / 'designs')
 os.environ['BURGERPRINTS_API_KEY'] = ''
 os.environ['GEMINI_API_KEY'] = ''

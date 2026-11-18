@@ -28,7 +28,8 @@ def auth(action: str, credentials: Credentials, response: Response, request: Req
         raise HTTPException(404)
     key = 'auth:' + hashlib.sha256((request.client.host if request.client else 'unknown').encode()).hexdigest()
     with workspace.connect() as db:
-        count = db.execute('SELECT COUNT(*) FROM events WHERE owner=? AND created>?', (key, time.time()-60)).fetchone()[0]
+        count = db.execute('SELECT COUNT(*) AS count FROM events WHERE owner=? AND created>?',
+                           (key, time.time()-60)).fetchone()['count']
     if count >= 15:
         raise HTTPException(429, 'Thử đăng nhập quá nhiều lần. Vui lòng đợi một phút.')
     workspace.event(key, action)
@@ -221,7 +222,10 @@ def edit_asset(ident: str, data: AssetEdit, owner=Depends(current_owner)):
 
 
 def file_response(row):
-    return FileResponse(Path(settings.FILE_STORAGE_PATH) / row['storage_name'],
+    path = Path(settings.FILE_STORAGE_PATH) / row['storage_name']
+    if not path.is_file():
+        raise HTTPException(404, 'Tệp thiết kế cần được tải lên lại.')
+    return FileResponse(path,
                         media_type=row['validation']['content_type'],
                         headers={'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=0'})
 
@@ -234,11 +238,7 @@ def preview(ident: str, owner=Depends(current_owner)):
 @router.get('/files/{token}')
 def fulfillment_file(token: str):
     # Opaque capability is only disclosed in a reviewed fulfillment request.
-    with workspace.connect() as db:
-        rows = db.execute("SELECT * FROM documents WHERE kind='asset' AND json_extract(body,'$.share_token')=?", (token,)).fetchone()
-    if not rows:
-        raise HTTPException(404)
-    return file_response(workspace.decode(rows))
+    return file_response(workspace.asset_for_share_token(token))
 
 
 @router.get('/orders')
@@ -305,13 +305,12 @@ async def tracking_callback(reference: str, token: str, request: Request):
         if len(body) > 65536:
             raise HTTPException(413)
     receipt = hashlib.sha256(reference.encode() + body).hexdigest()
-    with workspace.connect() as db:
-        db.execute('CREATE TABLE IF NOT EXISTS callback_receipts(id TEXT PRIMARY KEY, updated REAL, done INTEGER)')
-        db.execute('BEGIN IMMEDIATE')
+    with workspace.connect(lock=f'callback:{receipt}') as db:
         previous = db.execute('SELECT * FROM callback_receipts WHERE id=?', (receipt,)).fetchone()
         if previous and (previous['done'] or previous['updated'] > time.time() - 120):
             return {'received': True, 'duplicate': True}
-        db.execute('INSERT OR REPLACE INTO callback_receipts VALUES(?,?,0)', (receipt, time.time()))
+        db.execute('INSERT INTO callback_receipts VALUES(?,?,0) '
+                   'ON CONFLICT(id) DO UPDATE SET updated=excluded.updated, done=excluded.done', (receipt, time.time()))
     try:
         # Callback content is a hint, never the authority for status/ownership.
         await refresh_order(reference, row['owner'])
