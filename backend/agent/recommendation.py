@@ -32,6 +32,22 @@ def is_premium_followup(message: str) -> bool:
     ))
 
 
+def white_tshirt_question(message: str) -> bool:
+    return bool(re.fullmatch(
+        r'(?:co |tim |goi y )?(?:mau )?(?:ao thun|ao phong) (?:mau )?trang(?: nao)?(?: dep(?: dep)?)?(?: khong)?|'
+        r'(?:any |recommend |suggest |can you recommend )?(?:a )?(?:nice )?white (?:t shirts?|tees?)',
+        _plain_words(message),
+    ))
+
+
+def is_us_market_followup(message: str) -> bool:
+    return bool(re.fullmatch(
+        r'(?:(?:(?:minh|toi|em) )?ban (?:o |tai |cho )?)?(?:thi truong )?(?:my|hoa ky|us|usa)(?: a| nha)?|'
+        r'(?:(?:i sell|i m selling|selling) in (?:the )?)?(?:us|usa|united states)',
+        _plain_words(message),
+    ))
+
+
 def _sample_price(product, language):
     sku = product['variants'][0]
     price = f"{Decimal(str(sku['price'])):.2f}"
@@ -41,6 +57,37 @@ def _sample_price(product, language):
 def _advice_sections(language, recommendation, reasoning, tradeoff, question):
     headings = ('Đề xuất', 'Lý do', 'Điểm đánh đổi') if language == 'vi' else ('Recommendation', 'Reasoning', 'Trade-off')
     return '\n\n'.join([*(f'**{heading}**\n\n{text}' for heading, text in zip(headings, (recommendation, reasoning, tradeoff))), question])
+
+
+def white_tshirt_recommendation(result: dict, language: str, *, us_market: bool) -> str:
+    choices = result.get('results', [])
+    if not choices:
+        if result.get('code') == 'CATALOG_UNAVAILABLE':
+            return ('Catalog đang đồng bộ. Mình sẽ tra được mẫu trắng khi dữ liệu sẵn sàng.' if language == 'vi'
+                    else 'The catalog is syncing. White T-shirts can be checked once it is ready.')
+        if result.get('code'):
+            return ('Mình chưa tra được catalog lúc này. Bạn thử lại sau một lát nhé.' if language == 'vi'
+                    else 'The catalog lookup is temporarily unavailable. Please try again shortly.')
+        return ('Mình chưa tìm thấy mẫu áo thun unisex có biến thể trắng trong phạm vi vừa tra.' if language == 'vi'
+                else 'I could not verify a white unisex T-shirt in the catalog selection I searched.')
+
+    product = choices[0]
+    sku = product['variants'][0]
+    if language == 'vi':
+        market = ' cho thị trường Mỹ' if us_market else ''
+        price = f" với giá gốc **{sku['price']} USD/áo**" if sku.get('price') else ''
+        return _advice_sections(language,
+            f"Mình gợi ý **{product['name']}** màu trắng{market}.",
+            f"Màu trắng dễ phối với thiết kế chữ hoặc hình nhiều màu. Catalog có mã `{sku['sku_code']}`{price}.",
+            'Giá gốc chưa gồm phí giao. Bạn có thể chọn biến thể theo size và xưởng rồi kiểm tra khả dụng trong thẻ sản phẩm.',
+            'Bạn đang nhắm size nào?' if us_market else 'Bạn định bán ở thị trường nào?')
+    market = ' for the US market' if us_market else ''
+    price = f" at a base price of **{sku['price']} USD**" if sku.get('price') else ''
+    return _advice_sections(language,
+        f"I’d suggest **{product['name']}** in white{market}.",
+        f"White gives text and colorful designs a clean background. The catalog lists `{sku['sku_code']}`{price}.",
+        'Shipping is separate. Use the product card to pick the size and print provider and check availability.',
+        'Which size are you looking for?' if us_market else 'Which market are you selling in?')
 
 
 def premium_hoodie_comparison(result: dict, language: str) -> str:

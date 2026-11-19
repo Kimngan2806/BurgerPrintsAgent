@@ -10,7 +10,8 @@ from agent.domain_knowledge import build_domain_context
 from agent.language import language_instruction, matches_reply_language, reply_language
 from agent.recommendation import (
     beginner_hoodie_question, gross_margin_definition, hoodie_recommendation,
-    is_premium_followup, premium_hoodie_comparison,
+    is_premium_followup, is_us_market_followup, premium_hoodie_comparison,
+    white_tshirt_question, white_tshirt_recommendation,
 )
 from core.session import session_manager
 from agent.byteplus_agent import BytePlusChatSession
@@ -145,6 +146,17 @@ async def process_chat(session_id: str, message: str):
     definition = gross_margin_definition(message, language)
     if definition:
         yield {'data': json.dumps({'text': definition})}
+        yield {'data': '[DONE]'}
+        return
+    us_tee_followup = (is_us_market_followup(message) and bool(prior_messages)
+                       and white_tshirt_question(prior_messages[-1]))
+    if white_tshirt_question(message) or us_tee_followup:
+        criteria = {'query': 'unisex', 'category': 't-shirt', 'color': 'White', 'adult_only': True,
+                    'single_recommendation': True}
+        if us_tee_followup:
+            criteria['catalog_market'] = 'US'
+        result = await execute_tool('search_products', criteria, user_message=message, session_id=session_id)
+        yield {'data': json.dumps({'text': white_tshirt_recommendation(result, language, us_market=us_tee_followup)})}
         yield {'data': '[DONE]'}
         return
     if beginner_hoodie_question(message):

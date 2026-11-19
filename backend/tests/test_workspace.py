@@ -411,3 +411,45 @@ def test_chat_persists_messages_and_structured_criteria(env, monkeypatch):
     assert client.get('/api/work/conversation').json() == []
     assert client.get(conversation_url).status_code == 404
     assert client.post('/api/chat/stream', json={'session_id': conversation['id'], 'message': 'Đọc lại'}).status_code == 404
+
+
+def test_white_tee_advice_keeps_white_and_limits_the_us_followup(env, monkeypatch):
+    from agent import gemini_agent, tool_handlers
+    from cache.duckdb_store import DuckDBStore
+
+    _, client = env
+    monkeypatch.setattr(settings, 'DUCKDB_PATH', ':memory:')
+    catalog = DuckDBStore()
+    monkeypatch.setattr(tool_handlers, 'db_store', catalog)
+
+    def unexpected_model(*args, **kwargs):
+        raise AssertionError('White tee advice must use verified catalog data')
+
+    monkeypatch.setattr(gemini_agent, 'process_chat_provider', unexpected_model)
+    try:
+        catalog.replace_snapshot([
+            {'id': 'USKID', 'name': 'Baby Unisex T-Shirt', 'category': 't-shirt'},
+            {'id': 'EUTEE', 'name': 'Everyday Unisex T-Shirt', 'category': 't-shirt'},
+            {'id': 'USBLACK', 'name': 'Solid Unisex T-Shirt', 'category': 't-shirt'},
+            {'id': 'USTEE', 'name': 'Weekend Unisex T-Shirt', 'category': 't-shirt'},
+        ], [
+            {'sku_code': 'USKID-W', 'product_id': 'USKID', 'color': 'White', 'price': '5'},
+            {'sku_code': 'EUTEE-W', 'product_id': 'EUTEE', 'color': 'White', 'price': '7'},
+            {'sku_code': 'USBLACK-B', 'product_id': 'USBLACK', 'color': 'Black', 'price': '6'},
+            {'sku_code': 'USTEE-W', 'product_id': 'USTEE', 'color': 'White', 'price': '9.5'},
+            {'sku_code': 'USTEE-B', 'product_id': 'USTEE', 'color': 'Black', 'price': '8'},
+        ], [])
+        register(client)
+        conversation = client.post('/api/conversations').json()
+        for message in ('có áo thun màu trắng nào đẹp đẹp không', 'bán ở mỹ ă'):
+            response = client.post('/api/chat', json={'session_id': conversation['id'], 'message': message})
+            assert response.status_code == 200 and response.json()['response']
+        saved = client.get(f"/api/conversations/{conversation['id']}").json()
+        first, followup = saved['messages'][1], saved['messages'][3]
+        assert first['products'][0]['id'] == 'EUTEE'
+        assert 'EUTEE-W' in first['content'] and 'Baby' not in first['content']
+        assert 'thị trường Mỹ' in followup['content'] and 'USTEE-W' in followup['content']
+        assert [sku['sku_code'] for sku in followup['products'][0]['variants']] == ['USTEE-W']
+        assert saved['criteria']['color'] == 'White' and saved['criteria']['catalog_market'] == 'US'
+    finally:
+        catalog.close()
