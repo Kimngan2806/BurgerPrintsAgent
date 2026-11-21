@@ -4,8 +4,9 @@ import json
 import secrets
 import time
 from pathlib import Path
+from typing import Literal
 from urllib.parse import quote
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -91,6 +92,28 @@ def link_draft(ident: str, data: DraftLink, owner=Depends(current_owner)):
     body = {k: v for k, v in conversation.items() if k not in {'id', 'version', 'updated_at'}}
     body['draft_id'] = data.draft_id
     return workspace.update(owner, ident, 'conversation', conversation['version'], body)
+
+
+@router.get('/mockups/products')
+async def mockup_products(
+    kind: Literal['t-shirt', 'mug'],
+    q: str = Query(default='', max_length=100),
+    offset: int = Query(default=0, ge=0),
+    owner=Depends(current_owner),
+):
+    from cache.duckdb_store import db_store
+
+    page_size = 30
+    rows = db_store.list_mockup_products(kind, q.strip(), offset, page_size + 1)
+    return {'results': rows[:page_size], 'has_more': len(rows) > page_size,
+            'catalog_ready': db_store.catalog_ready}
+
+
+@router.get('/mockups/colors')
+async def mockup_colors(product_id: str = Query(min_length=1, max_length=200), owner=Depends(current_owner)):
+    from cache.duckdb_store import db_store
+
+    return {'colors': db_store.mockup_colors(product_id)}
 
 
 @router.get('/products')

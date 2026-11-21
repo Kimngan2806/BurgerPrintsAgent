@@ -43,8 +43,8 @@ export async function requestApi(path: string, method = 'GET', body?: unknown, s
   throw new ApiError(`Yêu cầu chưa hoàn tất (${response.status}). Kiểm tra các trường vừa nhập.`, response.status);
 }
 
-export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await requestApi(path, method, body);
+export async function api<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+  const response = await requestApi(path, method, body, signal);
   const data = await readJson(response);
   if (data === undefined) throw new ApiError(invalidResponse);
   return data as T;

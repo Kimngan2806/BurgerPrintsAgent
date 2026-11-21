@@ -303,6 +303,26 @@ class DuckDBStore:
             connection.execute("COMMIT")
         logger.info(f"Seeded {len(providers)} providers into DuckDB")
 
+    def list_mockup_products(self, kind: str, search: str, offset: int, limit: int) -> list[dict]:
+        return _rows(self.conn.execute("""
+            SELECT products.id, products.name
+            FROM products
+            WHERE products.category = ?
+              AND contains(lower(concat_ws(' ', products.name, products.display_name, products.id)), lower(?))
+              AND EXISTS (SELECT 1 FROM skus WHERE skus.product_id = products.id)
+            ORDER BY lower(products.name), products.id
+            LIMIT ? OFFSET ?
+        """, (kind, search, limit, offset)))
+
+    def mockup_colors(self, product_id: str) -> list[dict]:
+        return _rows(self.conn.execute("""
+            SELECT DISTINCT trim(skus.color) AS name, lower(trim(skus.color_hex)) AS hex
+            FROM skus JOIN products ON products.id = skus.product_id
+            WHERE products.id = ? AND products.category IN ('t-shirt', 'mug')
+              AND coalesce(trim(skus.color), '') <> ''
+            ORDER BY name, hex NULLS LAST
+        """, (product_id,)))
+
     def query_products(self, category: str = None, material: str = None, limit: int = 50) -> List[Dict]:
         """Query sản phẩm dựa trên attributes (Structured search)"""
         query = "SELECT * FROM products WHERE 1=1"

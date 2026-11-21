@@ -413,6 +413,41 @@ def test_chat_persists_messages_and_structured_criteria(env, monkeypatch):
     assert client.post('/api/chat/stream', json={'session_id': conversation['id'], 'message': 'Đọc lại'}).status_code == 404
 
 
+def test_mockup_catalog_lists_supported_models_and_their_actual_colors(env, monkeypatch):
+    from cache import duckdb_store
+
+    _, client = env
+    monkeypatch.setattr(settings, 'DUCKDB_PATH', ':memory:')
+    catalog = duckdb_store.DuckDBStore()
+    monkeypatch.setattr(duckdb_store, 'db_store', catalog)
+    try:
+        catalog.replace_snapshot([
+            {'id': 'TEE', 'name': 'Cotton T-Shirt', 'category': 't-shirt'},
+            {'id': 'MUG', 'name': 'Ceramic Mug', 'category': 'mug'},
+            {'id': 'HOOD', 'name': 'Hoodie', 'category': 'hoodie'},
+        ], [
+            {'sku_code': f'TEE-WHITE-{i}', 'product_id': 'TEE', 'color': 'White', 'color_hex': '#FFFFFF'}
+            for i in range(51)
+        ] + [
+            {'sku_code': 'TEE-NAVY-M', 'product_id': 'TEE', 'color': 'Navy', 'color_hex': '#102030'},
+            {'sku_code': 'MUG-BLACK-11', 'product_id': 'MUG', 'color': 'Black', 'color_hex': None},
+            {'sku_code': 'HOOD-BLACK-L', 'product_id': 'HOOD', 'color': 'Black', 'color_hex': '#000000'},
+        ], [])
+        assert client.get('/api/mockups/products?kind=mug').status_code == 401
+        register(client)
+        assert client.get('/api/mockups/products?kind=mug').json() == {
+            'results': [{'id': 'MUG', 'name': 'Ceramic Mug'}], 'has_more': False, 'catalog_ready': True,
+        }
+        assert client.get('/api/mockups/products', params={'kind': 't-shirt', 'q': 'cotton'}).json()['results'][0]['id'] == 'TEE'
+        assert client.get('/api/mockups/colors?product_id=TEE').json()['colors'] == [
+            {'name': 'Navy', 'hex': '#102030'}, {'name': 'White', 'hex': '#ffffff'},
+        ]
+        assert client.get('/api/mockups/colors?product_id=MUG').json()['colors'] == [{'name': 'Black', 'hex': None}]
+        assert client.get('/api/mockups/colors?product_id=HOOD').json()['colors'] == []
+    finally:
+        catalog.close()
+
+
 def test_white_tee_advice_keeps_white_and_limits_the_us_followup(env, monkeypatch):
     from agent import gemini_agent, tool_handlers
     from cache.duckdb_store import DuckDBStore
