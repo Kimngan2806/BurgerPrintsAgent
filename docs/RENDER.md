@@ -52,7 +52,7 @@ Nếu dùng BytePlus: đặt `PRIMARY_MODEL_PROVIDER=byteplus`, `SEEDANCE_API_KE
 
 ## Giới hạn đã chọn cho demo Free
 
-Theo [Render Free](https://render.com/docs/free), dịch vụ có thể ngủ sau 15 phút không hoạt động và mất thay đổi trên ổ đĩa khi khởi động lại. Catalog DuckDB và nội dung file thiết kế đã tải lên vẫn nằm trên ổ đĩa. Dữ liệu đã bị Render xóa trước khi kết nối PostgreSQL cần bản sao lưu để khôi phục.
+Theo [Render Free](https://render.com/docs/free), dịch vụ có thể ngủ sau 15 phút không hoạt động và mất thay đổi trên ổ đĩa khi khởi động lại. Khi có `WORKSPACE_DATABASE_URL` và key BurgerPrints, ứng dụng lưu bản catalog gần nhất đã đồng bộ thành công vào PostgreSQL. Nếu DuckDB trống lúc khởi động, ứng dụng nạp bản đó với thời điểm đồng bộ gốc rồi làm mới theo lịch. Lần đầu cần đồng bộ đầy đủ để tạo bản lưu. File thiết kế đã tải lên vẫn nằm trên ổ đĩa. Dữ liệu đã bị Render xóa trước khi kết nối PostgreSQL cần bản sao lưu để khôi phục.
 
 Bản Render dùng `requirements-runtime.txt`, không nạp Torch/SentenceTransformer/FAISS; tìm kiếm sử dụng DuckDB. Khi muốn dùng vector index, cần image chứa bộ requirements đầy đủ và dung lượng RAM phù hợp.
 
@@ -61,7 +61,7 @@ Bản Render dùng `requirements-runtime.txt`, không nạp Torch/SentenceTransf
 1. `/health` trả HTTP 200, `release` cho biết commit đang chạy trên Render, và `workspace_storage` là `postgresql` nếu đã đặt URL.
 2. Trang gốc hiển thị đăng nhập/đăng ký.
 3. Đăng ký tài khoản thử, mở trang làm việc và tạo đơn nháp.
-4. Có API key: kiểm tra `catalog_ready` sau khi đồng bộ nền, rồi thử chat và kiểm tra luồng trả lời.
+4. Có API key: kiểm tra `catalog_ready` sau khi đồng bộ nền. `catalog_snapshot_status` là `stored` khi PostgreSQL đã nhận bản lưu và `restored` khi DuckDB được nạp lại từ bản lưu đó.
 5. Khởi động lại dịch vụ, đăng nhập với cùng tài khoản thử và mở lại hội thoại từ lịch sử.
 6. Giữ `ENABLE_ORDER_SUBMISSION=false` cho demo giao diện. Để thử giao dịch, dùng PostgreSQL và nghiệm thu luồng sandbox trước.
 

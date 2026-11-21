@@ -173,7 +173,7 @@ class DuckDBStore:
             if name not in existing:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {column_type}")
 
-    def replace_snapshot(self, products, skus, providers):
+    def replace_snapshot(self, products, skus, providers, *, fetched_at=None):
         if not products or not skus:
             raise ValueError('Incomplete catalog snapshot; keeping last good catalog.')
         product_ids = {p['id'] for p in products}
@@ -181,13 +181,14 @@ class DuckDBStore:
             raise ValueError('Invalid catalog relationships.')
         if len({s['sku_code'] for s in skus}) != len(skus):
             raise ValueError('Duplicate SKU codes.')
+        fetched_at = int(time.time()) if fetched_at is None else fetched_at
         # A cursor owns a separate transaction, so readers see the last committed snapshot.
         with self.conn.cursor() as writer:
             writer.execute('BEGIN TRANSACTION')
             try:
-                self.seed_products(products, transaction=False, connection=writer)
-                self.seed_skus(skus, transaction=False, connection=writer)
-                self.seed_providers(providers, transaction=False, connection=writer)
+                self.seed_products(products, transaction=False, connection=writer, cached_at=fetched_at)
+                self.seed_skus(skus, transaction=False, connection=writer, cached_at=fetched_at)
+                self.seed_providers(providers, transaction=False, connection=writer, cached_at=fetched_at)
                 writer.execute('COMMIT')
             except BaseException:
                 writer.execute('ROLLBACK')
@@ -199,10 +200,10 @@ class DuckDBStore:
             "SELECT EXISTS (SELECT 1 FROM products) AND EXISTS (SELECT 1 FROM skus)"
         ).fetchone()[0]
 
-    def seed_products(self, products: List[Dict], transaction=True, *, connection=None):
+    def seed_products(self, products: List[Dict], transaction=True, *, connection=None, cached_at=None):
         """Cập nhật data sản phẩm vào DuckDB"""
         connection = self.conn if connection is None else connection
-        now = int(time.time())
+        now = int(time.time()) if cached_at is None else cached_at
         products = list({p.get("id"): p for p in products if p.get("id")}.values())
         
         # Dùng Appender để insert hàng loạt siêu nhanh
@@ -242,9 +243,9 @@ class DuckDBStore:
             self.catalog_ready = self.has_catalog()
         logger.info(f"Seeded {len(products)} products into DuckDB")
 
-    def seed_skus(self, skus: List[Dict], transaction=True, *, connection=None):
+    def seed_skus(self, skus: List[Dict], transaction=True, *, connection=None, cached_at=None):
         connection = self.conn if connection is None else connection
-        now = int(time.time())
+        now = int(time.time()) if cached_at is None else cached_at
         skus = list({s.get("sku_code"): s for s in skus if s.get("sku_code")}.values())
         text_columns = (
             "sku_code", "product_id", "color", "size", "material", "provider_id",
@@ -280,9 +281,9 @@ class DuckDBStore:
             self.catalog_ready = self.has_catalog()
         logger.info(f"Seeded {len(skus)} SKUs into DuckDB")
 
-    def seed_providers(self, providers: List[Dict], transaction=True, *, connection=None):
+    def seed_providers(self, providers: List[Dict], transaction=True, *, connection=None, cached_at=None):
         connection = self.conn if connection is None else connection
-        now = int(time.time())
+        now = int(time.time()) if cached_at is None else cached_at
         providers = list({p.get("id"): p for p in providers if p.get("id")}.values())
         if transaction:
             connection.execute("BEGIN TRANSACTION")

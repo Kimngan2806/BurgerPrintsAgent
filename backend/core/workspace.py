@@ -57,6 +57,14 @@ class Workspace:
             for statement in schema.split(';'):
                 if statement.strip():
                     db.execute(statement)
+            if self.backend == 'postgresql':
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS catalog_snapshots(
+                        source TEXT NOT NULL, format_version INTEGER NOT NULL,
+                        fetched_at BIGINT NOT NULL, payload BYTEA NOT NULL,
+                        PRIMARY KEY (source, format_version)
+                    )
+                """)
 
     @contextmanager
     def connect(self, *, lock=None):

@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import os
+import time
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,20 +28,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def maintain_catalog():
-    if settings.CACHE_SYNC_ON_STARTUP:
-        rebuild_fn = hybrid_searcher.build_index if settings.BUILD_SEARCH_INDEX_ON_STARTUP else None
-        await catalog_sync.sync_catalog_to_cache(rebuild_search_index_fn=rebuild_fn)
-
     interval = max(60, settings.CATALOG_SYNC_INTERVAL_SECONDS)
+    restored_at = await catalog_sync.restore_catalog()
+    delay = interval if restored_at is None else max(0, min(interval, restored_at + interval - time.time()))
+    rebuild_fn = hybrid_searcher.build_index if settings.BUILD_SEARCH_INDEX_ON_STARTUP else None
+    needs_startup_sync = restored_at is None or delay == 0 or settings.CATALOG_SYNC_INTERVAL_SECONDS <= 0
+    if settings.CACHE_SYNC_ON_STARTUP and needs_startup_sync:
+        await catalog_sync.sync_catalog_to_cache(rebuild_search_index_fn=rebuild_fn)
+        delay = interval
+    elif restored_at is not None and rebuild_fn is not None:
+        rebuild_fn(db_store.get_all_products_raw())
+
     retry_delay = 30
     while settings.CATALOG_SYNC_INTERVAL_SECONDS > 0:
         if settings.BURGERPRINTS_API_KEY and not db_store.catalog_ready:
             await asyncio.sleep(min(interval, retry_delay))
             retry_delay = min(retry_delay * 2, 600)
         else:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(delay)
             retry_delay = 30
         await catalog_sync.sync_catalog_to_cache()
+        delay = interval
 
 
 @asynccontextmanager
@@ -93,6 +101,8 @@ async def health_check():
         "search_ready": True,
         "catalog_ready": db_store.catalog_ready,
         "catalog_sync_status": catalog_sync.catalog_sync_status,
+        "catalog_snapshot_status": catalog_sync.catalog_snapshot_status,
+        "catalog_snapshot_fetched_at": catalog_sync.catalog_snapshot_fetched_at,
         "vector_search_ready": hybrid_searcher.is_ready,
         "harness_active": ff_manager.is_active()
     }
