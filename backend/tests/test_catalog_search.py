@@ -1,4 +1,7 @@
 import asyncio
+import os
+import subprocess
+import sys
 from threading import Event
 
 import httpx
@@ -52,6 +55,33 @@ def test_catalog_sync_collapses_aliases_and_excludes_conflicting_skus(monkeypatc
         assert store.has_catalog()
     finally:
         store.close()
+
+
+def test_render_disk_catalog_can_commit_a_full_refresh(tmp_path):
+    # A separate process lets the test time out if DuckDB wedges in COMMIT.
+    subprocess.run(
+        [sys.executable, '-c', """
+from cache.duckdb_store import db_store
+
+products = [{'id': f'US{i:04}', 'name': f'Unisex T-shirt {i}', 'category': 't-shirt'} for i in range(706)]
+skus = [
+    {'sku_code': f'US-{i:05}-White-M', 'product_id': products[i % len(products)]['id'],
+     'color': 'White', 'size': 'M', 'price': '8.50', 'provider_id': 'US',
+     'raw_json': {'price': '8.50', 'print_area': 'front'}}
+    for i in range(54916)
+]
+try:
+    db_store.replace_snapshot(products, skus, [{'id': 'US', 'name': 'Test provider'}])
+    assert db_store.get_sku_by_code('US-54915-White-M')['color'] == 'White'
+    db_store.replace_snapshot(products, skus, [{'id': 'US', 'name': 'Updated provider'}])
+    assert db_store.get_provider_by_id('US')['name'] == 'Updated provider'
+finally:
+    db_store.close()
+"""],
+        env=dict(os.environ, RENDER='true', DUCKDB_PATH=str(tmp_path / 'catalog.duckdb')),
+        check=True,
+        timeout=60,
+    )
 
 
 def test_white_tshirt_search_filters_skus_before_limiting_products(monkeypatch):
