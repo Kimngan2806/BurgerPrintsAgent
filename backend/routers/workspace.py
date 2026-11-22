@@ -4,12 +4,12 @@ import json
 import secrets
 import time
 from pathlib import Path
-from typing import Literal
 from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
+from cache.mockup_catalog import MOCKUP_KINDS
 from core.config import settings
 from core.workspace import workspace, current_owner
 from harness.design_validator import fetch_design, validate_design_bytes, MAX_DESIGN_BYTES
@@ -96,17 +96,26 @@ def link_draft(ident: str, data: DraftLink, owner=Depends(current_owner)):
 
 @router.get('/mockups/products')
 async def mockup_products(
-    kind: Literal['t-shirt', 'mug'],
+    kind: str = Query(default='all', max_length=32),
     q: str = Query(default='', max_length=100),
     offset: int = Query(default=0, ge=0),
     owner=Depends(current_owner),
 ):
     from cache.duckdb_store import db_store
 
+    if kind != 'all' and kind not in MOCKUP_KINDS:
+        raise HTTPException(422, 'Loại sản phẩm không hợp lệ.')
     page_size = 30
     rows = db_store.list_mockup_products(kind, q.strip(), offset, page_size + 1)
     return {'results': rows[:page_size], 'has_more': len(rows) > page_size,
             'catalog_ready': db_store.catalog_ready}
+
+
+@router.get('/mockups/kinds')
+async def mockup_kinds(owner=Depends(current_owner)):
+    from cache.duckdb_store import db_store
+
+    return {'results': db_store.mockup_kinds(), 'catalog_ready': db_store.catalog_ready}
 
 
 @router.get('/mockups/colors')

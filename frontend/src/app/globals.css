@@ -597,7 +597,7 @@ body {
   height: clamp(380px, 54vh, 570px);
   overflow: hidden;
   isolation: isolate;
-  background: radial-gradient(ellipse at 44% 35%, #faf8f2 4%, #eeeae3 59%, #dddce0);
+  background: radial-gradient(ellipse at 44% 36%, #e9e8e5 5%, #deddda 65%, #d2d1cf);
   color: #303943;
 }
 
@@ -608,6 +608,7 @@ body {
 }
 
 .mockup-canvas:active { cursor: grabbing; }
+.mockup-canvas[data-art-cursor=move], .mockup-canvas[data-art-cursor=dragging] { cursor: move; }
 .mockup-canvas canvas { display: block; width: 100%; height: 100%; }
 
 .mockup-product-label {
@@ -648,17 +649,14 @@ body {
 
 .workspace-shell .mockup-rotation button:hover { background: #eeeae4; }
 .workspace-shell .mockup-rotation button[aria-pressed=true] { background: #ffe5b5; color: #8e420a; }
-.mockup-stage .mockup-drag-hint {
-  position: absolute;
-  bottom: 24px;
-  right: 17px;
+.mockup-caption .mockup-drag-hint {
   display: flex;
   align-items: center;
-  gap: 5px;
-  color: #515661;
-  font-size: 11px;
-  pointer-events: none;
+  gap: 7px;
+  color: var(--text-primary);
+  font-weight: 600;
 }
+.mockup-drag-hint svg { flex-shrink: 0; }
 
 .mockup-caption { display: grid; gap: 5px; padding: 12px 16px; font-size: 12px; }
 .mockup-caption [role=alert] { color: var(--danger); }
@@ -686,9 +684,6 @@ body {
 .studio-section { display: grid; gap: 14px; padding: 19px 20px; }
 .studio-section + .studio-section { border-top: 1px solid var(--border); }
 .studio-section h2 { font-size: 16px; }
-.studio-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
-.workspace-shell .studio-kinds button { justify-content: flex-start; font-weight: 600; }
-.workspace-shell .studio-kinds button[aria-pressed=true],
 .workspace-shell .studio-library button[aria-pressed=true] {
   color: var(--accent-text);
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
@@ -742,6 +737,12 @@ body {
 .workspace-shell .studio-scale { display: grid; grid-template-columns: 1fr auto; }
 .studio-scale span { font-variant-numeric: tabular-nums; }
 .workspace-shell .studio-scale input { grid-column: span 2; padding: 0; accent-color: var(--accent); }
+.workspace-shell .studio-background { flex-direction: row; align-items: center; gap: 9px; font-size: 13px; }
+.workspace-shell .studio-background input { width: 16px; height: 16px; accent-color: var(--accent); }
+.studio-placement summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+.studio-placement[open] summary { margin-bottom: 12px; }
+.studio-placement > label { margin-bottom: 8px; }
+.workspace-shell .studio-placement button { font-size: 12px; }
 .studio-import summary, .studio-asset-edit summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
 .studio-import summary svg { vertical-align: middle; margin-inline: 3px; }
 .studio-import > label { margin-top: 13px; }
@@ -762,7 +763,6 @@ body {
   .studio-heading { gap: 10px; }
   .studio-heading h1 { font-size: 23px; }
   .studio-icon { width: 41px; height: 41px; }
-  .mockup-stage .mockup-drag-hint { display: none; }
   .studio-library-heading { align-items: stretch; flex-direction: column; }
   .studio-library-heading label { width: 100%; }
 }

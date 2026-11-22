@@ -2,9 +2,9 @@
 
 import dynamic from 'next/dynamic';
 import {useEffect, useRef, useState} from 'react';
-import {Box, ChevronLeft, ChevronRight, Coffee, ImagePlus, Link2, Search, Shirt, X} from 'lucide-react';
+import {Box, ChevronLeft, ChevronRight, ImagePlus, Link2, Search, X} from 'lucide-react';
 import {api, apiUrl} from '@/lib/api';
-import type {MockupKind} from '@/lib/mockup-models';
+import {centeredArtwork, mockupLabels, type MockupKind, type Placement} from '@/lib/mockup-types';
 
 const MockupViewer = dynamic(() => import('./MockupViewer'), {
   ssr: false,
@@ -28,14 +28,15 @@ type StudioProps = {
   run: (action: () => Promise<void>) => Promise<void>;
   onNotice: (message: string) => void;
 };
-type CatalogProduct = {id: string; name: string};
+type CatalogProduct = {id: string; name: string; kind: MockupKind};
 type CatalogPage = {results: CatalogProduct[]; has_more: boolean; catalog_ready: boolean};
+type CatalogKind = {kind: MockupKind; count: number};
 type CatalogColor = {name: string; hex: string | null};
 type ColorOption = {key: string; name: string; hex: string; exact: boolean};
 type Artwork = {url: string; name: string; assetId?: string};
 
 const PAGE_SIZE = 30;
-const NEUTRAL = '#f6f4ee';
+const NEUTRAL = '#f9f8f5';
 const namedColors: Record<string, string> = {
   white: '#ffffff', black: '#161616', navy: '#182339', red: '#c72434',
   'royal blue': '#214894', 'light blue': '#a0c6de', pink: '#efb1c6', 'light pink': '#f4c4d2',
@@ -64,7 +65,8 @@ function assetUrl(asset: DesignAsset) {
 }
 
 export default function DesignStudio({assets, busy, refreshLists, run, onNotice}: StudioProps) {
-  const [kind, setKind] = useState<MockupKind>('t-shirt');
+  const [kind, setKind] = useState<MockupKind | 'all'>('t-shirt');
+  const [kinds, setKinds] = useState<CatalogKind[]>([]);
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [retry, setRetry] = useState(0);
@@ -74,6 +76,8 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
   const [colorKey, setColorKey] = useState('');
   const [artwork, setArtwork] = useState<Artwork>();
   const [scale, setScale] = useState(100);
+  const [position, setPosition] = useState<Placement>(centeredArtwork);
+  const [removeBackground, setRemoveBackground] = useState(true);
   const [previousAsset, setPreviousAsset] = useState('');
   const [assetQuery, setAssetQuery] = useState('');
   const top = useRef<HTMLDivElement>(null);
@@ -84,6 +88,15 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
   const product = products.find(item => item.id === productId);
   const currentColors = colors?.id === product?.id ? colors : undefined;
   const color = currentColors?.options?.find(item => item.key === colorKey);
+  const modelKind = product?.kind ?? (kind === 'all' ? 't-shirt' : kind);
+
+  useEffect(() => {
+    const abort = new AbortController();
+    void api<{results: CatalogKind[]}>('/mockups/kinds', 'GET', undefined, abort.signal).then(data => {
+      if (!abort.signal.aborted) setKinds(data.results);
+    }).catch(() => {});
+    return () => abort.abort();
+  }, [retry, catalog?.data?.catalog_ready]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -118,6 +131,7 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
   useEffect(() => () => {if (localImageUrl) URL.revokeObjectURL(localImageUrl);}, [localImageUrl]);
 
   function useAsset(asset: DesignAsset) {
+    if (artwork?.assetId !== asset.id) setPosition(centeredArtwork);
     setArtwork({url: assetUrl(asset), name: asset.name, assetId: asset.id});
   }
 
@@ -128,6 +142,7 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
     }
     const url = URL.createObjectURL(file);
     setArtwork({url, name: file.name});
+    setPosition(centeredArtwork);
     void run(async () => {
       const data = new FormData();
       data.set('file', file);
@@ -139,7 +154,7 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
     });
   }
 
-  function changeKind(next: MockupKind) {
+  function changeKind(next: MockupKind | 'all') {
     if (next === kind) return;
     setKind(next);
     setQuery('');
@@ -158,15 +173,22 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
       <div><h1>Xem thử thiết kế 3D</h1><p>Chọn sản phẩm, màu và đặt ảnh của bạn lên mẫu.</p></div>
     </div>
     <div className="studio-grid">
-      <MockupViewer kind={kind} color={color?.hex ?? NEUTRAL} productName={product?.name}
-        artworkUrl={artwork?.url} scale={scale / 100} />
+      <MockupViewer kind={modelKind} color={color?.hex ?? NEUTRAL} productName={product?.name}
+        artworkUrl={artwork?.url} scale={scale / 100} position={position} onPositionChange={setPosition}
+        removeBackground={removeBackground} />
       <div className="studio-controls">
         <div className="studio-section">
           <h2>Sản phẩm</h2>
-          <div className="studio-kinds" role="group" aria-label="Loại sản phẩm">
-            <button type="button" aria-pressed={kind === 't-shirt'} onClick={() => changeKind('t-shirt')}><Shirt size={18} /> Áo thun</button>
-            <button type="button" aria-pressed={kind === 'mug'} onClick={() => changeKind('mug')}><Coffee size={18} /> Cốc</button>
-          </div>
+          <label className="studio-field">Loại sản phẩm
+            <select value={kind} onChange={event => changeKind(event.target.value as MockupKind | 'all')}>
+              <option value="all">Tất cả sản phẩm</option>
+              {(Object.keys(mockupLabels) as MockupKind[]).map(key => {
+                const count = kinds.find(item => item.kind === key)?.count;
+                if (kinds.length && !count && key !== kind) return null;
+                return <option key={key} value={key}>{mockupLabels[key]}{count ? ' (' + count + ')' : ''}</option>;
+              })}
+            </select>
+          </label>
           <label className="studio-field">Tìm trong catalog
             <span className="studio-search"><Search size={16} /><input value={query} maxLength={100}
               onChange={event => {setQuery(event.target.value); setPage(0);}} placeholder="Tên hoặc mã sản phẩm" /></span>
@@ -213,9 +235,27 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
             <input type="file" aria-label="Tải ảnh thiết kế" accept="image/png,image/jpeg,image/webp" disabled={busy}
               onChange={event => {const file = event.target.files?.[0]; event.target.value = ''; if (file) upload(file);}} />
           </label>
-          {artwork && <label className="studio-field studio-scale">Kích thước ảnh <span>{scale}%</span>
-            <input type="range" min={65} max={125} value={scale} onChange={event => setScale(Number(event.target.value))} />
-          </label>}
+          {artwork && <>
+            <label className="studio-background">
+              <input type="checkbox" checked={removeBackground} onChange={event => setRemoveBackground(event.target.checked)} />
+              <span>Bỏ nền trắng hoặc caro khi xem thử</span>
+            </label>
+            <label className="studio-field studio-scale">Kích thước ảnh <span>{scale}%</span>
+              <input type="range" aria-label="Kích thước ảnh" min={25} max={155} value={scale} onChange={event => setScale(Number(event.target.value))} />
+            </label>
+            <details className="studio-placement">
+              <summary>Điều chỉnh vị trí ảnh</summary>
+              <label className="studio-field studio-scale">Ngang <span>{Math.round(position.x * 100)}%</span>
+                <input type="range" aria-label="Vị trí ngang" min={-100} max={100} value={Math.round(position.x * 100)}
+                  onChange={event => setPosition(value => ({...value, x: Number(event.target.value) / 100}))} />
+              </label>
+              <label className="studio-field studio-scale">Dọc <span>{Math.round(position.y * 100)}%</span>
+                <input type="range" aria-label="Vị trí dọc" min={-100} max={100} value={Math.round(position.y * 100)}
+                  onChange={event => setPosition(value => ({...value, y: Number(event.target.value) / 100}))} />
+              </label>
+              <button type="button" onClick={() => setPosition(centeredArtwork)}>Đưa ảnh về giữa</button>
+            </details>
+          </>}
           <details className="studio-import">
             <summary><Link2 size={16} /> Nhập URL hoặc thay phiên bản</summary>
             <label className="studio-field">Phiên bản mới của

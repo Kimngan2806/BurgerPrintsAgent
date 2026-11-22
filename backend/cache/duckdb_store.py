@@ -6,9 +6,19 @@ import os
 from typing import List, Dict, Any, Optional
 
 from core.config import settings
+from cache.mockup_catalog import MOCKUP_KIND_PARAMS, MOCKUP_KIND_SQL
 
 logger = logging.getLogger(__name__)
 
+MOCKUP_PRODUCTS_SQL = f"""
+    WITH designable AS (
+        SELECT p.id, p.name, p.category, concat_ws(' ', p.name, p.display_name) AS title
+        FROM products p
+        WHERE EXISTS (SELECT 1 FROM skus s WHERE s.product_id = p.id)
+    ), classified AS (
+        SELECT id, name, title, {MOCKUP_KIND_SQL} AS kind FROM designable
+    )
+"""
 
 def _rows(cursor):
     columns = [column[0] for column in cursor.description]
@@ -304,22 +314,23 @@ class DuckDBStore:
         logger.info(f"Seeded {len(providers)} providers into DuckDB")
 
     def list_mockup_products(self, kind: str, search: str, offset: int, limit: int) -> list[dict]:
-        return _rows(self.conn.execute("""
-            SELECT products.id, products.name
-            FROM products
-            WHERE products.category = ?
-              AND contains(lower(concat_ws(' ', products.name, products.display_name, products.id)), lower(?))
-              AND EXISTS (SELECT 1 FROM skus WHERE skus.product_id = products.id)
-            ORDER BY lower(products.name), products.id
+        return _rows(self.conn.execute(MOCKUP_PRODUCTS_SQL + """
+            SELECT id, name, kind FROM classified
+            WHERE (? = 'all' OR kind = ?) AND contains(lower(concat_ws(' ', title, id)), lower(?))
+            ORDER BY lower(name), id
             LIMIT ? OFFSET ?
-        """, (kind, search, limit, offset)))
+        """, (*MOCKUP_KIND_PARAMS, kind, kind, search, limit, offset)))
+
+    def mockup_kinds(self) -> list[dict]:
+        return _rows(self.conn.execute(MOCKUP_PRODUCTS_SQL + """
+            SELECT kind, count(*) AS count FROM classified GROUP BY kind
+        """, MOCKUP_KIND_PARAMS))
 
     def mockup_colors(self, product_id: str) -> list[dict]:
         return _rows(self.conn.execute("""
             SELECT DISTINCT trim(skus.color) AS name, lower(trim(skus.color_hex)) AS hex
             FROM skus JOIN products ON products.id = skus.product_id
-            WHERE products.id = ? AND products.category IN ('t-shirt', 'mug')
-              AND coalesce(trim(skus.color), '') <> ''
+            WHERE skus.product_id = ? AND coalesce(trim(skus.color), '') <> ''
             ORDER BY name, hex NULLS LAST
         """, (product_id,)))
 

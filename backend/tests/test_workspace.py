@@ -425,6 +425,9 @@ def test_mockup_catalog_lists_supported_models_and_their_actual_colors(env, monk
             {'id': 'TEE', 'name': 'Cotton T-Shirt', 'category': 't-shirt'},
             {'id': 'MUG', 'name': 'Ceramic Mug', 'category': 'mug'},
             {'id': 'HOOD', 'name': 'Hoodie', 'category': 'hoodie'},
+            {'id': 'POSTER', 'name': 'Framed Poster - Portrait', 'category': 'other'},
+            {'id': 'POLO', 'name': 'Unisex Jersey Polo', 'category': 't-shirt'},
+            {'id': 'EMPTY', 'name': 'Tote Bag', 'category': 'other'},
         ], [
             {'sku_code': f'TEE-WHITE-{i}', 'product_id': 'TEE', 'color': 'White', 'color_hex': '#FFFFFF'}
             for i in range(51)
@@ -432,18 +435,29 @@ def test_mockup_catalog_lists_supported_models_and_their_actual_colors(env, monk
             {'sku_code': 'TEE-NAVY-M', 'product_id': 'TEE', 'color': 'Navy', 'color_hex': '#102030'},
             {'sku_code': 'MUG-BLACK-11', 'product_id': 'MUG', 'color': 'Black', 'color_hex': None},
             {'sku_code': 'HOOD-BLACK-L', 'product_id': 'HOOD', 'color': 'Black', 'color_hex': '#000000'},
+            {'sku_code': 'POSTER-11', 'product_id': 'POSTER'},
+            {'sku_code': 'POLO-XL', 'product_id': 'POLO'},
         ], [])
         assert client.get('/api/mockups/products?kind=mug').status_code == 401
         register(client)
         assert client.get('/api/mockups/products?kind=mug').json() == {
-            'results': [{'id': 'MUG', 'name': 'Ceramic Mug'}], 'has_more': False, 'catalog_ready': True,
+            'results': [{'id': 'MUG', 'name': 'Ceramic Mug', 'kind': 'mug'}], 'has_more': False, 'catalog_ready': True,
+        }
+        assert client.get('/api/mockups/products?kind=all&q=poster').json()['results'] == [
+            {'id': 'POSTER', 'name': 'Framed Poster - Portrait', 'kind': 'wall-art'},
+        ]
+        kinds = client.get('/api/mockups/kinds').json()['results']
+        assert {row['kind']: row['count'] for row in kinds} == {
+            't-shirt': 1, 'mug': 1, 'hoodie': 1, 'wall-art': 1, 'polo': 1,
         }
         assert client.get('/api/mockups/products', params={'kind': 't-shirt', 'q': 'cotton'}).json()['results'][0]['id'] == 'TEE'
         assert client.get('/api/mockups/colors?product_id=TEE').json()['colors'] == [
             {'name': 'Navy', 'hex': '#102030'}, {'name': 'White', 'hex': '#ffffff'},
         ]
         assert client.get('/api/mockups/colors?product_id=MUG').json()['colors'] == [{'name': 'Black', 'hex': None}]
-        assert client.get('/api/mockups/colors?product_id=HOOD').json()['colors'] == []
+        assert client.get('/api/mockups/colors?product_id=HOOD').json()['colors'] == [
+            {'name': 'Black', 'hex': '#000000'},
+        ]
     finally:
         catalog.close()
 

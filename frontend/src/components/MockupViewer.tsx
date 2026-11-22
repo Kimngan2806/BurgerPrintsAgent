@@ -4,109 +4,183 @@ import {useEffect, useRef, useState} from 'react';
 import {MousePointer2, Pause, Play, RotateCcw, RotateCw, Scan} from 'lucide-react';
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-import {createMockupModel, type MockupKind, type MockupModel} from '@/lib/mockup-models';
+import {createMockupModel, type MockupModel} from '@/lib/mockup-models';
+import {prepareArtwork} from '@/lib/mockup-artwork';
+import {centeredArtwork, mockupLabels, type MockupKind, type Placement} from '@/lib/mockup-types';
 
 type ViewerProps = {
   kind: MockupKind;
   color: string;
   productName?: string;
   artworkUrl?: string;
+  removeBackground: boolean;
   scale: number;
+  position: Placement;
+  onPositionChange: (position: Placement) => void;
 };
 
 function disposeModel(model: MockupModel) {
+  const materials = new Set<THREE.Material>();
+  materials.add(model.surface);
+  if (model.trim) materials.add(model.trim);
   model.group.traverse(object => {
-    if (object instanceof THREE.Mesh) object.geometry.dispose();
+    if (!(object instanceof THREE.Mesh)) return;
+    object.geometry.dispose();
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+      materials.add(material);
+    }
   });
-  model.surface.dispose();
-  model.trim?.dispose();
+  materials.forEach(material => material.dispose());
 }
 
-function artworkTexture(image: HTMLImageElement) {
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 1024;
-  const context = canvas.getContext('2d');
-  if (!context) return null;
-  const scale = 1016 / Math.max(image.naturalWidth, image.naturalHeight);
-  const width = image.naturalWidth * scale;
-  const height = image.naturalHeight * scale;
-  context.drawImage(image, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
+function softShadow() {
+  const size = 96;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const radius = Math.hypot((x + 0.5) / size * 2 - 1, (y + 0.5) / size * 2 - 1);
+      data[(y * size + x) * 4 + 3] = 69 * Math.max(0, 1 - radius * radius) ** 3;
+    }
+  }
+  const texture = new THREE.DataTexture(data, size, size);
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+  const shadow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({map: texture, transparent: true, depthWrite: false, toneMapped: false}));
+  shadow.rotateX(-Math.PI / 2);
+  return shadow;
 }
 
-function makeViewer(host: HTMLDivElement) {
+function makeViewer(host: HTMLDivElement, onPositionChange: ViewerProps['onPositionChange'], stopSpin: () => void) {
   const renderer = new THREE.WebGLRenderer({alpha: true, antialias: true});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.NeutralToneMapping;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
-  renderer.domElement.setAttribute('aria-hidden', 'true');
-  host.appendChild(renderer.domElement);
+  const canvas = renderer.domElement;
+  canvas.setAttribute('aria-hidden', 'true');
+  host.appendChild(canvas);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(37, 1, 0.1, 32);
-  camera.position.set(1.45, 1.17, 4.65);
-  const controls = new OrbitControls(camera, renderer.domElement);
+  const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 24);
+  const controls = new OrbitControls(camera, canvas);
   controls.enableZoom = false;
   controls.enablePan = false;
   controls.enableDamping = true;
-  controls.minPolarAngle = 0.28;
+  controls.minPolarAngle = 0.35;
   controls.maxPolarAngle = Math.PI - 0.35;
   controls.autoRotateSpeed = 1.3;
-  controls.target.set(0, 0.06, 0);
-  controls.update();
-  controls.saveState();
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0xb3bbc6, 2.05));
-  const keyLight = new THREE.DirectionalLight(0xfff8ee, 2.0);
-  keyLight.position.set(-3, 7, 4);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xc8c5c0, 1.62));
+  const keyLight = new THREE.DirectionalLight(0xfffdfb, 2.05);
+  keyLight.position.set(-3.2, 5.1, 3.3);
   keyLight.castShadow = true;
-  keyLight.shadow.mapSize.set(768, 768);
-  keyLight.shadow.camera.left = keyLight.shadow.camera.bottom = -2.5;
-  keyLight.shadow.camera.right = keyLight.shadow.camera.top = 2.5;
-  keyLight.shadow.bias = -0.00035;
-  const rimLight = new THREE.DirectionalLight(0xe5edff, 1.0);
-  rimLight.position.set(3, 3, -3);
-  scene.add(keyLight, rimLight);
-
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(22, 22), new THREE.ShadowMaterial({opacity: 0.12}));
-  floor.rotateX(-Math.PI / 2);
-  floor.position.y = -1.13;
-  floor.receiveShadow = true;
-  scene.add(floor);
+  keyLight.shadow.mapSize.set(1024, 1024);
+  keyLight.shadow.camera.left = keyLight.shadow.camera.bottom = -2.25;
+  keyLight.shadow.camera.right = keyLight.shadow.camera.top = 2.25;
+  keyLight.shadow.bias = -0.00022;
+  keyLight.shadow.normalBias = 0.031;
+  const fill = new THREE.DirectionalLight(0xe7ecff, 0.34);
+  fill.position.set(4, 1.2, 2.5);
+  const rim = new THREE.DirectionalLight(0xffffff, 0.90);
+  rim.position.set(1.5, 3, -4);
+  const shadow = softShadow();
+  scene.add(keyLight, fill, rim, shadow);
 
   const printMaterial = new THREE.MeshStandardMaterial({
-    transparent: true, alphaTest: 0.015, depthWrite: false,
-    polygonOffset: true, polygonOffsetFactor: -3, roughness: 0.83,
+    transparent: true, alphaTest: 0.002, depthWrite: false, roughness: 0.86,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
   });
   let model: MockupModel | undefined;
   let print: THREE.Mesh | undefined;
-  let printScale = 1;
+  let artAspect = 1;
+  let scale = 1;
+  let position = centeredArtwork;
+  const span = new THREE.Vector2(0.58, 0.58);
+  const center = new THREE.Vector2(0.5, 0.5);
+  const raycaster = new THREE.Raycaster();
+  const cursor = new THREE.Vector2();
+  let drag: {pointer: number; offset: THREE.Vector2} | undefined;
   let needsRender = true;
   const requestRender = () => {needsRender = true;};
   controls.addEventListener('change', requestRender);
-  renderer.domElement.addEventListener('webglcontextrestored', requestRender);
-  function applyPrint() {
-    requestRender();
-    if (print) {
-      print.removeFromParent();
-      print.geometry.dispose();
-      print = undefined;
+  canvas.addEventListener('webglcontextrestored', requestRender);
+
+  function updatePrint() {
+    const texture = printMaterial.map;
+    if (print) print.visible = Boolean(texture);
+    if (texture && model) {
+      const aspect = artAspect / model.printAspect;
+      const size = Math.min(0.95, 0.58 * scale);
+      span.set(size * Math.min(1, aspect), size * Math.min(1, 1 / aspect));
+      center.set(0.5 + (1 - span.x) * position.x / 2, 0.5 + (1 - span.y) * position.y / 2);
+      texture.repeat.set(1 / span.x, 1 / span.y);
+      texture.offset.set(0.5 - center.x / span.x, 0.5 - center.y / span.y);
     }
-    if (!model || !printMaterial.map) return;
-    model.group.updateMatrixWorld(true);
-    print = new THREE.Mesh(model.createPrint(printScale), printMaterial);
-    print.renderOrder = 1;
-    model.group.add(print);
+    requestRender();
   }
+
+  function pointOnPrint(event: PointerEvent) {
+    if (!print?.visible || !model) return undefined;
+    const rect = canvas.getBoundingClientRect();
+    cursor.set((event.clientX - rect.left) / rect.width * 2 - 1, 1 - (event.clientY - rect.top) / rect.height * 2);
+    raycaster.setFromCamera(cursor, camera);
+    return raycaster.intersectObject(print, false)[0]?.uv;
+  }
+
+  function hitsArtwork(uv: THREE.Vector2) {
+    return Math.abs(uv.x - center.x) <= span.x / 2 && Math.abs(uv.y - center.y) <= span.y / 2;
+  }
+
+  function beginDrag(event: PointerEvent) {
+    if (!event.isPrimary || event.button !== 0) return;
+    const uv = pointOnPrint(event);
+    if (!uv || !hitsArtwork(uv)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    drag = {pointer: event.pointerId, offset: uv.clone().sub(center)};
+    controls.enabled = false;
+    controls.autoRotate = false;
+    stopSpin();
+    host.dataset.artCursor = 'dragging';
+    canvas.setPointerCapture(event.pointerId);
+  }
+
+  function movePointer(event: PointerEvent) {
+    const uv = pointOnPrint(event);
+    if (!drag) {
+      host.dataset.artCursor = uv && hitsArtwork(uv) ? 'move' : '';
+      return;
+    }
+    if (!uv || event.pointerId !== drag.pointer) return;
+    position = {
+      x: THREE.MathUtils.clamp(2 * (uv.x - drag.offset.x - 0.5) / (1 - span.x), -1, 1),
+      y: THREE.MathUtils.clamp(2 * (uv.y - drag.offset.y - 0.5) / (1 - span.y), -1, 1),
+    };
+    updatePrint();
+  }
+
+  function endDrag(event: PointerEvent) {
+    if (event.pointerId !== drag?.pointer) return;
+    drag = undefined;
+    controls.enabled = true;
+    host.dataset.artCursor = '';
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    onPositionChange(position);
+  }
+  canvas.addEventListener('pointerdown', beginDrag, true);
+  canvas.addEventListener('pointermove', movePointer);
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('lostpointercapture', endDrag);
 
   const observer = new ResizeObserver(() => {
     const {clientWidth: width, clientHeight: height} = host;
     if (!width || !height) return;
     camera.aspect = width / height;
-    camera.zoom = Math.min(1, camera.aspect * 1.04);
+    camera.zoom = Math.min(1, camera.aspect * 1.10);
     camera.updateProjectionMatrix();
     renderer.setSize(width, height, false);
     requestRender();
@@ -120,7 +194,7 @@ function makeViewer(host: HTMLDivElement) {
     const delta = Math.min(0.05, (time - (lastFrame || time)) / 1000);
     lastFrame = time;
     if (!visible) return;
-    controls.update(delta);
+    if (!drag) controls.update(delta);
     if (needsRender) {
       renderer.render(scene, camera);
       needsRender = false;
@@ -135,66 +209,98 @@ function makeViewer(host: HTMLDivElement) {
       camera.position.copy(controls.target).add(offset);
       controls.update();
     },
-    setProduct(kind: MockupKind) {
-      if (print) {
-        print.removeFromParent();
-        print.geometry.dispose();
-        print = undefined;
-      }
+    setProduct(kind: MockupKind, name?: string) {
       if (model) {
+        print?.removeFromParent();
+        print?.geometry.dispose();
         model.group.removeFromParent();
         disposeModel(model);
       }
-      model = createMockupModel(kind);
+      model = createMockupModel(kind, name);
+      model.group.position.set(0, 0, 0);
+      const bounds = new THREE.Box3().setFromObject(model.group);
+      const size = bounds.getSize(new THREE.Vector3());
+      const factor = 2.67 / Math.max(size.y, size.x * 0.92);
+      model.group.scale.setScalar(factor);
+      model.group.position.copy(bounds.getCenter(new THREE.Vector3())).multiplyScalar(-factor);
+      print = new THREE.Mesh(model.print, printMaterial);
+      print.renderOrder = 1;
+      print.receiveShadow = true;
+      model.group.add(print);
       scene.add(model.group);
-      controls.reset();
-      applyPrint();
+      shadow.position.y = -size.y * factor / 2 - 0.20;
+      shadow.scale.set(Math.max(2.25, size.x * factor * 1.4), Math.max(1.25, size.z * factor * 1.7), 1);
+      const drinkware = kind === 'mug' || kind === 'tumbler';
+      camera.position.set(drinkware || kind === 'cap' ? 1.12 : 0.59, drinkware || kind === 'cap' ? 1.20 : 0.52, 5.24);
+      controls.target.set(0, -0.04, 0);
+      controls.update();
+      controls.saveState();
+      updatePrint();
     },
     setColor(color: string) {
       model?.surface.color.set(color);
-      model?.trim?.color.set(color).multiplyScalar(0.85);
+      model?.trim?.color.set(color).multiplyScalar(0.88);
       requestRender();
     },
-    setScale(scale: number) {
-      printScale = scale;
-      applyPrint();
+    setLayout(nextScale: number, nextPosition: Placement) {
+      scale = nextScale;
+      position = nextPosition;
+      updatePrint();
     },
-    setArt(texture: THREE.Texture | null) {
+    setArt(prepared: ReturnType<typeof prepareArtwork>) {
       printMaterial.map?.dispose();
-      printMaterial.map = texture;
+      if (prepared) {
+        const texture = new THREE.CanvasTexture(prepared.canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        // The clear outer pixels keep the surface transparent outside the decal.
+        texture.generateMipmaps = false;
+        texture.minFilter = THREE.LinearFilter;
+        printMaterial.map = texture;
+        artAspect = prepared.canvas.width / prepared.canvas.height;
+      } else {
+        printMaterial.map = null;
+      }
       printMaterial.needsUpdate = true;
-      applyPrint();
+      updatePrint();
     },
     dispose() {
       intersection.disconnect();
       observer.disconnect();
       controls.removeEventListener('change', requestRender);
-      renderer.domElement.removeEventListener('webglcontextrestored', requestRender);
+      canvas.removeEventListener('webglcontextrestored', requestRender);
+      canvas.removeEventListener('pointerdown', beginDrag, true);
+      canvas.removeEventListener('pointermove', movePointer);
+      canvas.removeEventListener('pointerup', endDrag);
+      canvas.removeEventListener('pointercancel', endDrag);
+      canvas.removeEventListener('lostpointercapture', endDrag);
       controls.dispose();
       renderer.setAnimationLoop(null);
+      print?.removeFromParent();
+      print?.geometry.dispose();
       if (model) disposeModel(model);
       printMaterial.map?.dispose();
       printMaterial.dispose();
-      floor.geometry.dispose();
-      floor.material.dispose();
+      shadow.geometry.dispose();
+      shadow.material.map?.dispose();
+      shadow.material.dispose();
       keyLight.shadow.dispose();
       renderer.dispose();
-      renderer.domElement.remove();
+      canvas.remove();
     },
   };
 }
 
-export default function MockupViewer({kind, color, productName, artworkUrl, scale}: ViewerProps) {
+export default function MockupViewer({kind, color, productName, artworkUrl, removeBackground, scale, position, onPositionChange}: ViewerProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<ReturnType<typeof makeViewer> | null>(null);
   const [unavailable, setUnavailable] = useState(false);
-  const [artError, setArtError] = useState(false);
+  const [artState, setArtState] = useState<'none' | 'ready' | 'cleaned' | 'error'>('none');
   const [spinning, setSpinning] = useState(false);
 
   useEffect(() => {
     if (!host.current) return;
     try {
-      viewer.current = makeViewer(host.current);
+      viewer.current = makeViewer(host.current, onPositionChange, () => setSpinning(false));
     } catch {
       setUnavailable(true);
     }
@@ -202,37 +308,42 @@ export default function MockupViewer({kind, color, productName, artworkUrl, scal
       viewer.current?.dispose();
       viewer.current = null;
     };
-  }, []);
+  }, [onPositionChange]);
 
-  useEffect(() => { viewer.current?.setProduct(kind); }, [kind]);
-  useEffect(() => { viewer.current?.setColor(color); }, [color, kind]);
-  useEffect(() => { viewer.current?.setScale(scale); }, [scale]);
+  useEffect(() => {viewer.current?.setProduct(kind, productName);}, [kind, productName]);
+  useEffect(() => {viewer.current?.setColor(color);}, [color, kind, productName]);
+  useEffect(() => {viewer.current?.setLayout(scale, position);}, [scale, position]);
   useEffect(() => {
     if (viewer.current) viewer.current.controls.autoRotate = spinning;
   }, [spinning]);
   useEffect(() => {
     const current = viewer.current;
     if (!current) return;
+    setArtState('none');
     current.setArt(null);
-    setArtError(false);
     if (!artworkUrl) return;
     const image = new Image();
     if (new URL(artworkUrl, window.location.href).origin !== window.location.origin &&
         !artworkUrl.startsWith('blob:')) image.crossOrigin = 'use-credentials';
     image.onload = () => {
-      const texture = artworkTexture(image);
-      current.setArt(texture);
-      setArtError(!texture);
+      try {
+        const prepared = prepareArtwork(image, removeBackground);
+        current.setArt(prepared);
+        setArtState(prepared ? prepared.removed ? 'cleaned' : 'ready' : 'error');
+      } catch {
+        setArtState('error');
+      }
     };
-    image.onerror = () => setArtError(true);
+    image.onerror = () => setArtState('error');
     image.src = artworkUrl;
-    return () => { image.onload = image.onerror = null; };
-  }, [artworkUrl]);
+    return () => {image.onload = image.onerror = null;};
+  }, [artworkUrl, removeBackground]);
 
+  const hasPrint = artState === 'ready' || artState === 'cleaned';
   return <section className="mockup-viewer" aria-label="Xem sản phẩm 3D">
     <div className="mockup-stage">
       <div className="mockup-canvas" ref={host} />
-      <div className="mockup-product-label"><strong>{productName || (kind === 'mug' ? 'Mẫu cốc' : 'Mẫu áo thun')}</strong></div>
+      <div className="mockup-product-label"><strong>{productName || mockupLabels[kind]}</strong></div>
       {unavailable && <div className="mockup-fallback" role="status">
         {artworkUrl && <img src={artworkUrl} alt="Ảnh thiết kế" />}
         <p>Trình duyệt hoặc thiết bị này chưa hỗ trợ xem 3D.</p>
@@ -246,11 +357,14 @@ export default function MockupViewer({kind, color, productName, artworkUrl, scal
           {spinning ? <Pause size={16} /> : <Play size={16} />}
         </button>
       </div>}
-      {!unavailable && <p className="mockup-drag-hint"><MousePointer2 size={14} /> Kéo để xoay</p>}
     </div>
     <div className="mockup-caption">
-      {artError && <p role="alert">Ảnh thiết kế chưa tải được. Bạn có thể chọn lại ảnh hoặc tải lên bản mới.</p>}
-      <p>Mô phỏng hình dáng và vị trí ảnh. Vùng in thực tế theo mẫu của xưởng.</p>
+      {!unavailable && <p className="mockup-drag-hint"><MousePointer2 size={14} />
+        {hasPrint ? 'Kéo ảnh để di chuyển. Kéo phần còn lại để xoay.' : 'Kéo để xoay mẫu.'}
+      </p>}
+      {artState === 'error' && <p role="alert">Ảnh thiết kế trống hoặc chưa tải được.</p>}
+      {artState === 'cleaned' && <p role="status">Đã bỏ nền trắng hoặc caro trong bản xem thử.</p>}
+      <p>{kind === 'other' ? 'Sản phẩm này dùng phôi minh họa.' : 'Hình dáng mô phỏng theo nhóm sản phẩm.'} Vùng in thực tế theo mẫu của xưởng.</p>
     </div>
   </section>;
 }
