@@ -581,20 +581,28 @@ body {
   color: var(--accent-text);
 }
 
-.studio-heading h1 { margin: 0 0 4px; }
-.studio-heading p, .mockup-caption p { margin: 0; color: var(--text-secondary); }
-.studio-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr); gap: 22px; align-items: start; }
+.studio-heading h1 { margin: 0; }
+.mockup-caption p { margin: 0; color: var(--text-secondary); }
+.studio-grid {
+  display: grid;
+  grid-template-columns: minmax(265px, .55fr) minmax(0, 1fr);
+  grid-template-areas: "controls preview";
+  gap: 20px;
+  align-items: start;
+}
+.studio-preview { grid-area: preview; position: sticky; top: 12px; min-width: 0; z-index: 2; }
 
 .mockup-viewer {
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: 16px;
   overflow: hidden;
+  background: var(--bg);
 }
 
 .mockup-stage {
   position: relative;
-  height: clamp(380px, 54vh, 570px);
+  height: clamp(270px, calc(100svh - 375px), 615px);
   overflow: hidden;
   isolation: isolate;
   background: radial-gradient(ellipse at 44% 36%, #e9e8e5 5%, #deddda 65%, #d2d1cf);
@@ -609,6 +617,8 @@ body {
 
 .mockup-canvas:active { cursor: grabbing; }
 .mockup-canvas[data-art-cursor=move], .mockup-canvas[data-art-cursor=dragging] { cursor: move; }
+.mockup-canvas[data-art-cursor=place] { cursor: crosshair; }
+.mockup-canvas[data-art-cursor=outside] { cursor: not-allowed; }
 .mockup-canvas canvas { display: block; width: 100%; height: 100%; }
 
 .mockup-product-label {
@@ -624,36 +634,40 @@ body {
   pointer-events: none;
 }
 
-.mockup-rotation {
+.mockup-toolbar {
   display: flex;
-  gap: 4px;
-  position: absolute;
-  bottom: 17px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 5px;
-  border: 1px solid #fff;
-  border-radius: 12px;
-  background: #ffffffdf;
-  box-shadow: 0 4px 16px #35313719;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
 }
+.mockup-rotation { display: flex; gap: 2px; }
 
 .workspace-shell .mockup-rotation button {
-  width: 37px;
-  height: 37px;
+  width: 35px;
+  height: 35px;
   padding: 0;
   border-color: transparent;
   background: transparent;
-  color: #303943;
+  color: var(--text);
 }
 
-.workspace-shell .mockup-rotation button:hover { background: #eeeae4; }
-.workspace-shell .mockup-rotation button[aria-pressed=true] { background: #ffe5b5; color: #8e420a; }
+.workspace-shell .mockup-rotation button:hover { background: var(--bg-hover); }
+.workspace-shell .mockup-rotation button[aria-pressed=true],
+.workspace-shell .mockup-place {
+  background: color-mix(in srgb, var(--accent) 13%, var(--bg));
+  color: var(--accent-text);
+}
+.workspace-shell .mockup-place { padding: 7px 10px; font-size: 12px; font-weight: 600; }
+.workspace-shell .mockup-place[aria-pressed=true] { background: var(--accent); color: #201300; border-color: var(--accent); }
+.workspace-shell .mockup-place:hover:not(:disabled, [aria-pressed=true]) { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); }
 .mockup-caption .mockup-drag-hint {
   display: flex;
   align-items: center;
   gap: 7px;
-  color: var(--text-primary);
+  color: var(--text);
   font-weight: 600;
 }
 .mockup-drag-hint svg { flex-shrink: 0; }
@@ -674,16 +688,36 @@ body {
 .mockup-fallback img { max-width: 70%; max-height: 61%; object-fit: contain; }
 
 .studio-controls {
+  grid-area: controls;
   min-width: 0;
-  overflow: hidden;
+  max-height: max(320px, calc(100svh - 205px));
+  overflow: auto;
   border: 1px solid var(--border);
   border-radius: 16px;
   background: var(--bg);
 }
 
-.studio-section { display: grid; gap: 14px; padding: 19px 20px; }
-.studio-section + .studio-section { border-top: 1px solid var(--border); }
-.studio-section h2 { font-size: 16px; }
+.studio-editor-switch {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 9px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sidebar);
+}
+.workspace-shell .studio-editor-switch button { border-color: transparent; padding: 8px 5px; text-align: center; font-size: 13px; }
+.workspace-shell .studio-editor-switch button svg { flex-shrink: 0; }
+.workspace-shell .studio-editor-switch button[aria-pressed=true] {
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent) 13%, var(--bg));
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  font-weight: 600;
+}
+.studio-section { display: grid; gap: 12px; padding: 15px 16px; }
+.studio-section[hidden] { display: none; }
 .workspace-shell .studio-library button[aria-pressed=true] {
   color: var(--accent-text);
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
@@ -755,8 +789,12 @@ body {
 .studio-asset-edit form { padding-top: 10px; }
 
 @container (max-width: 760px) {
-  .studio-grid { grid-template-columns: minmax(0, 1fr); }
-  .mockup-stage { height: clamp(330px, 49vh, 480px); }
+  .studio-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "preview" "controls"; gap: 12px; }
+  .studio-preview { top: 4px; }
+  .mockup-stage { height: clamp(190px, 34svh, 365px); }
+  .mockup-caption { padding: 7px 10px; }
+  .studio-controls { max-height: none; overflow: visible; }
+  .studio-editor-switch { position: static; border-radius: 15px 15px 0 0; }
 }
 
 @media (max-width: 580px) {

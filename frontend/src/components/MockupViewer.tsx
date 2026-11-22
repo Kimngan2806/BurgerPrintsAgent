@@ -1,7 +1,7 @@
 'use client';
 
 import {useEffect, useRef, useState} from 'react';
-import {MousePointer2, Pause, Play, RotateCcw, RotateCw, Scan} from 'lucide-react';
+import {Check, MousePointer2, Move, Pause, Play, RotateCcw, RotateCw, Scan} from 'lucide-react';
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {createMockupModel, type MockupModel} from '@/lib/mockup-models';
@@ -52,7 +52,12 @@ function softShadow() {
   return shadow;
 }
 
-function makeViewer(host: HTMLDivElement, onPositionChange: ViewerProps['onPositionChange'], stopSpin: () => void) {
+function makeViewer(
+  host: HTMLDivElement,
+  onPositionChange: ViewerProps['onPositionChange'],
+  stopSpin: () => void,
+  onPlacingChange: (active: boolean) => void,
+) {
   const renderer = new THREE.WebGLRenderer({alpha: true, antialias: true});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -93,11 +98,17 @@ function makeViewer(host: HTMLDivElement, onPositionChange: ViewerProps['onPosit
     transparent: true, alphaTest: 0.002, depthWrite: false, roughness: 0.86,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
   });
+  const guideMaterial = new THREE.MeshBasicMaterial({
+    color: '#f59e0b', transparent: true, opacity: 0.17, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+  });
   let model: MockupModel | undefined;
   let print: THREE.Mesh | undefined;
+  let guide: THREE.Mesh | undefined;
   let artAspect = 1;
   let scale = 1;
   let position = centeredArtwork;
+  let placementPreview: Placement | undefined;
   const span = new THREE.Vector2(0.58, 0.58);
   const center = new THREE.Vector2(0.5, 0.5);
   const raycaster = new THREE.Raycaster();
@@ -111,11 +122,13 @@ function makeViewer(host: HTMLDivElement, onPositionChange: ViewerProps['onPosit
   function updatePrint() {
     const texture = printMaterial.map;
     if (print) print.visible = Boolean(texture);
+    if (guide) guide.visible = Boolean(texture && placementPreview);
     if (texture && model) {
       const aspect = artAspect / model.printAspect;
       const size = Math.min(0.95, 0.58 * scale);
       span.set(size * Math.min(1, aspect), size * Math.min(1, 1 / aspect));
-      center.set(0.5 + (1 - span.x) * position.x / 2, 0.5 + (1 - span.y) * position.y / 2);
+      const next = placementPreview ?? position;
+      center.set(0.5 + (1 - span.x) * next.x / 2, 0.5 + (1 - span.y) * next.y / 2);
       texture.repeat.set(1 / span.x, 1 / span.y);
       texture.offset.set(0.5 - center.x / span.x, 0.5 - center.y / span.y);
     }
@@ -134,41 +147,77 @@ function makeViewer(host: HTMLDivElement, onPositionChange: ViewerProps['onPosit
     return Math.abs(uv.x - center.x) <= span.x / 2 && Math.abs(uv.y - center.y) <= span.y / 2;
   }
 
+  function coordinatesAt(uv: THREE.Vector2, offsetX = 0, offsetY = 0): Placement {
+    return {
+      x: THREE.MathUtils.clamp(2 * (uv.x - offsetX - 0.5) / (1 - span.x), -1, 1),
+      y: THREE.MathUtils.clamp(2 * (uv.y - offsetY - 0.5) / (1 - span.y), -1, 1),
+    };
+  }
+
+  function finishPlacing(commit: boolean) {
+    if (!placementPreview) return;
+    if (commit) position = placementPreview;
+    placementPreview = undefined;
+    const pointer = drag?.pointer;
+    drag = undefined;
+    if (pointer !== undefined && canvas.hasPointerCapture(pointer)) canvas.releasePointerCapture(pointer);
+    controls.enabled = true;
+    host.dataset.artCursor = '';
+    onPlacingChange(false);
+    updatePrint();
+    if (commit) onPositionChange(position);
+  }
+
   function beginDrag(event: PointerEvent) {
     if (!event.isPrimary || event.button !== 0) return;
     const uv = pointOnPrint(event);
-    if (!uv || !hitsArtwork(uv)) return;
+    if (!uv || (!placementPreview && !hitsArtwork(uv))) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    drag = {pointer: event.pointerId, offset: uv.clone().sub(center)};
+    const offset = placementPreview ? new THREE.Vector2() : uv.clone().sub(center);
+    drag = {pointer: event.pointerId, offset};
     controls.enabled = false;
     controls.autoRotate = false;
     stopSpin();
     host.dataset.artCursor = 'dragging';
     canvas.setPointerCapture(event.pointerId);
+    if (placementPreview) {
+      placementPreview = coordinatesAt(uv);
+      updatePrint();
+    }
   }
 
   function movePointer(event: PointerEvent) {
+    if (!event.isPrimary) return;
     const uv = pointOnPrint(event);
+    if (placementPreview) {
+      host.dataset.artCursor = uv ? (drag ? 'dragging' : 'place') : 'outside';
+      if (uv) {
+        placementPreview = coordinatesAt(uv);
+        updatePrint();
+      }
+      return;
+    }
     if (!drag) {
       host.dataset.artCursor = uv && hitsArtwork(uv) ? 'move' : '';
       return;
     }
     if (!uv || event.pointerId !== drag.pointer) return;
-    position = {
-      x: THREE.MathUtils.clamp(2 * (uv.x - drag.offset.x - 0.5) / (1 - span.x), -1, 1),
-      y: THREE.MathUtils.clamp(2 * (uv.y - drag.offset.y - 0.5) / (1 - span.y), -1, 1),
-    };
+    position = coordinatesAt(uv, drag.offset.x, drag.offset.y);
     updatePrint();
   }
 
   function endDrag(event: PointerEvent) {
     if (event.pointerId !== drag?.pointer) return;
     drag = undefined;
-    controls.enabled = true;
+    controls.enabled = !placementPreview;
     host.dataset.artCursor = '';
     if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-    onPositionChange(position);
+    if (placementPreview) {
+      if (event.type === 'pointerup' && pointOnPrint(event)) finishPlacing(true);
+    } else {
+      onPositionChange(position);
+    }
   }
   canvas.addEventListener('pointerdown', beginDrag, true);
   canvas.addEventListener('pointermove', movePointer);
@@ -194,7 +243,7 @@ function makeViewer(host: HTMLDivElement, onPositionChange: ViewerProps['onPosit
     const delta = Math.min(0.05, (time - (lastFrame || time)) / 1000);
     lastFrame = time;
     if (!visible) return;
-    if (!drag) controls.update(delta);
+    if (!drag && !placementPreview) controls.update(delta);
     if (needsRender) {
       renderer.render(scene, camera);
       needsRender = false;
@@ -203,6 +252,17 @@ function makeViewer(host: HTMLDivElement, onPositionChange: ViewerProps['onPosit
 
   return {
     controls,
+    startPlacing() {
+      if (!print?.visible || placementPreview || drag) return;
+      placementPreview = position;
+      controls.autoRotate = false;
+      stopSpin();
+      controls.reset();
+      controls.enabled = false;
+      onPlacingChange(true);
+      updatePrint();
+    },
+    finishPlacing,
     turn(degrees: number) {
       const offset = camera.position.clone().sub(controls.target);
       offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(degrees));
@@ -210,7 +270,9 @@ function makeViewer(host: HTMLDivElement, onPositionChange: ViewerProps['onPosit
       controls.update();
     },
     setProduct(kind: MockupKind, name?: string) {
+      finishPlacing(false);
       if (model) {
+        guide?.removeFromParent();
         print?.removeFromParent();
         print?.geometry.dispose();
         model.group.removeFromParent();
@@ -224,9 +286,11 @@ function makeViewer(host: HTMLDivElement, onPositionChange: ViewerProps['onPosit
       model.group.scale.setScalar(factor);
       model.group.position.copy(bounds.getCenter(new THREE.Vector3())).multiplyScalar(-factor);
       print = new THREE.Mesh(model.print, printMaterial);
-      print.renderOrder = 1;
+      print.renderOrder = 2;
       print.receiveShadow = true;
-      model.group.add(print);
+      guide = new THREE.Mesh(model.print, guideMaterial);
+      guide.renderOrder = 1;
+      model.group.add(guide, print);
       scene.add(model.group);
       shadow.position.y = -size.y * factor / 2 - 0.20;
       shadow.scale.set(Math.max(2.25, size.x * factor * 1.4), Math.max(1.25, size.z * factor * 1.7), 1);
@@ -248,6 +312,7 @@ function makeViewer(host: HTMLDivElement, onPositionChange: ViewerProps['onPosit
       updatePrint();
     },
     setArt(prepared: ReturnType<typeof prepareArtwork>) {
+      if (!prepared) finishPlacing(false);
       printMaterial.map?.dispose();
       if (prepared) {
         const texture = new THREE.CanvasTexture(prepared.canvas);
@@ -275,11 +340,13 @@ function makeViewer(host: HTMLDivElement, onPositionChange: ViewerProps['onPosit
       canvas.removeEventListener('lostpointercapture', endDrag);
       controls.dispose();
       renderer.setAnimationLoop(null);
+      guide?.removeFromParent();
       print?.removeFromParent();
       print?.geometry.dispose();
       if (model) disposeModel(model);
       printMaterial.map?.dispose();
       printMaterial.dispose();
+      guideMaterial.dispose();
       shadow.geometry.dispose();
       shadow.material.map?.dispose();
       shadow.material.dispose();
@@ -296,11 +363,12 @@ export default function MockupViewer({kind, color, productName, artworkUrl, remo
   const [unavailable, setUnavailable] = useState(false);
   const [artState, setArtState] = useState<'none' | 'ready' | 'cleaned' | 'error'>('none');
   const [spinning, setSpinning] = useState(false);
+  const [placing, setPlacing] = useState(false);
 
   useEffect(() => {
     if (!host.current) return;
     try {
-      viewer.current = makeViewer(host.current, onPositionChange, () => setSpinning(false));
+      viewer.current = makeViewer(host.current, onPositionChange, () => setSpinning(false), setPlacing);
     } catch {
       setUnavailable(true);
     }
@@ -340,7 +408,12 @@ export default function MockupViewer({kind, color, productName, artworkUrl, remo
   }, [artworkUrl, removeBackground]);
 
   const hasPrint = artState === 'ready' || artState === 'cleaned';
-  return <section className="mockup-viewer" aria-label="Xem sản phẩm 3D">
+  return <section className="mockup-viewer" aria-label="Xem sản phẩm 3D" onKeyDown={event => {
+    if (placing && event.key === 'Escape') {
+      event.stopPropagation();
+      viewer.current?.finishPlacing(false);
+    }
+  }}>
     <div className="mockup-stage">
       <div className="mockup-canvas" ref={host} />
       <div className="mockup-product-label"><strong>{productName || mockupLabels[kind]}</strong></div>
@@ -348,19 +421,27 @@ export default function MockupViewer({kind, color, productName, artworkUrl, remo
         {artworkUrl && <img src={artworkUrl} alt="Ảnh thiết kế" />}
         <p>Trình duyệt hoặc thiết bị này chưa hỗ trợ xem 3D.</p>
       </div>}
-      {!unavailable && <div className="mockup-rotation">
-        <button type="button" aria-label="Xoay sang trái" title="Xoay sang trái" onClick={() => viewer.current?.turn(-45)}><RotateCcw size={17} /></button>
-        <button type="button" aria-label="Xoay sang phải" title="Xoay sang phải" onClick={() => viewer.current?.turn(45)}><RotateCw size={17} /></button>
-        <button type="button" aria-label="Về góc nhìn ban đầu" title="Về góc nhìn ban đầu" onClick={() => {setSpinning(false); viewer.current?.controls.reset();}}><Scan size={17} /></button>
-        <button type="button" aria-label={spinning ? 'Dừng tự xoay' : 'Tự xoay'} aria-pressed={spinning}
+    </div>
+    {!unavailable && <div className="mockup-toolbar">
+      <button type="button" className="mockup-place" aria-pressed={placing} disabled={!hasPrint}
+        title={hasPrint ? undefined : 'Tải ảnh để đặt vị trí'}
+        onClick={() => placing ? viewer.current?.finishPlacing(true) : viewer.current?.startPlacing()}>
+        {placing ? <Check size={16} /> : <Move size={16} />} {placing ? 'Xong' : 'Đặt vị trí ảnh'}
+      </button>
+      <div className="mockup-rotation" role="group" aria-label="Xoay mô hình">
+        <button type="button" disabled={placing} aria-label="Xoay sang trái" title="Xoay sang trái" onClick={() => viewer.current?.turn(-45)}><RotateCcw size={17} /></button>
+        <button type="button" disabled={placing} aria-label="Xoay sang phải" title="Xoay sang phải" onClick={() => viewer.current?.turn(45)}><RotateCw size={17} /></button>
+        <button type="button" disabled={placing} aria-label="Về góc nhìn ban đầu" title="Về góc nhìn ban đầu" onClick={() => {setSpinning(false); viewer.current?.controls.reset();}}><Scan size={17} /></button>
+        <button type="button" disabled={placing} aria-label={spinning ? 'Dừng tự xoay' : 'Tự xoay'} aria-pressed={spinning}
           title={spinning ? 'Dừng tự xoay' : 'Tự xoay'} onClick={() => setSpinning(value => !value)}>
           {spinning ? <Pause size={16} /> : <Play size={16} />}
         </button>
-      </div>}
-    </div>
+      </div>
+    </div>}
     <div className="mockup-caption">
-      {!unavailable && <p className="mockup-drag-hint"><MousePointer2 size={14} />
-        {hasPrint ? 'Kéo ảnh để di chuyển. Kéo phần còn lại để xoay.' : 'Kéo để xoay mẫu.'}
+      {!unavailable && <p className="mockup-drag-hint" aria-live="polite"><MousePointer2 size={14} />
+        {placing ? 'Di chuột trong vùng tô màu rồi bấm để đặt. Bạn cũng có thể chạm trực tiếp.'
+          : hasPrint ? 'Kéo hình in để di chuyển. Kéo phần còn lại để xoay.' : 'Kéo để xoay mẫu.'}
       </p>}
       {artState === 'error' && <p role="alert">Ảnh thiết kế trống hoặc chưa tải được.</p>}
       {artState === 'cleaned' && <p role="status">Đã bỏ nền trắng hoặc caro trong bản xem thử.</p>}

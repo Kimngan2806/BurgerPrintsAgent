@@ -80,6 +80,7 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
   const [removeBackground, setRemoveBackground] = useState(true);
   const [previousAsset, setPreviousAsset] = useState('');
   const [assetQuery, setAssetQuery] = useState('');
+  const [editor, setEditor] = useState<'products' | 'artwork'>('products');
   const top = useRef<HTMLDivElement>(null);
   const localImageUrl = artwork?.url.startsWith('blob:') ? artwork.url : undefined;
   const catalogKey = JSON.stringify([kind, query.trim(), page, retry]);
@@ -133,6 +134,7 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
   function useAsset(asset: DesignAsset) {
     if (artwork?.assetId !== asset.id) setPosition(centeredArtwork);
     setArtwork({url: assetUrl(asset), name: asset.name, assetId: asset.id});
+    setEditor('artwork');
   }
 
   function upload(file: File) {
@@ -170,15 +172,19 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
   return <div className="design-studio" ref={top}>
     <div className="studio-heading">
       <span className="studio-icon"><Box size={23} /></span>
-      <div><h1>Xem thử thiết kế 3D</h1><p>Chọn sản phẩm, màu và đặt ảnh của bạn lên mẫu.</p></div>
+      <h1>Thiết kế trên mẫu 3D</h1>
     </div>
     <div className="studio-grid">
-      <MockupViewer kind={modelKind} color={color?.hex ?? NEUTRAL} productName={product?.name}
-        artworkUrl={artwork?.url} scale={scale / 100} position={position} onPositionChange={setPosition}
-        removeBackground={removeBackground} />
       <div className="studio-controls">
-        <div className="studio-section">
-          <h2>Sản phẩm</h2>
+        <div className="studio-editor-switch" role="group" aria-label="Bảng chỉnh thiết kế">
+          <button type="button" aria-pressed={editor === 'products'} onClick={() => setEditor('products')}>
+            <Box size={16} /> Sản phẩm
+          </button>
+          <button type="button" aria-pressed={editor === 'artwork'} onClick={() => setEditor('artwork')}>
+            <ImagePlus size={16} /> Ảnh và vị trí
+          </button>
+        </div>
+        <div className="studio-section" hidden={editor !== 'products'}>
           <label className="studio-field">Loại sản phẩm
             <select value={kind} onChange={event => changeKind(event.target.value as MockupKind | 'all')}>
               <option value="all">Tất cả sản phẩm</option>
@@ -222,8 +228,7 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
               : currentColors ? 'Mẫu này chưa có màu trong catalog.' : 'Đang tải màu…'}</p>}
           </div>}
         </div>
-        <div className="studio-section">
-          <h2>Ảnh thiết kế</h2>
+        <div className="studio-section" hidden={editor !== 'artwork'}>
           {artwork && <div className="studio-artwork">
             <img src={artwork.url} alt="" />
             <span title={artwork.name}>{artwork.name}</span>
@@ -244,7 +249,7 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
               <input type="range" aria-label="Kích thước ảnh" min={25} max={155} value={scale} onChange={event => setScale(Number(event.target.value))} />
             </label>
             <details className="studio-placement">
-              <summary>Điều chỉnh vị trí ảnh</summary>
+              <summary>Căn chỉnh bằng thanh trượt</summary>
               <label className="studio-field studio-scale">Ngang <span>{Math.round(position.x * 100)}%</span>
                 <input type="range" aria-label="Vị trí ngang" min={-100} max={100} value={Math.round(position.x * 100)}
                   onChange={event => setPosition(value => ({...value, x: Number(event.target.value) / 100}))} />
@@ -280,6 +285,11 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
             </form>
           </details>
         </div>
+      </div>
+      <div className="studio-preview">
+        <MockupViewer kind={modelKind} color={color?.hex ?? NEUTRAL} productName={product?.name}
+          artworkUrl={artwork?.url} scale={scale / 100} position={position} onPositionChange={setPosition}
+          removeBackground={removeBackground} />
       </div>
     </div>
     <section className="studio-library">
