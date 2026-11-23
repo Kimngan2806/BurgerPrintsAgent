@@ -5,6 +5,7 @@ from core.config import settings
 
 
 FREE_MODEL_ROUTER = "openrouter/free"
+PAID_FLASH_LITE = "google/gemini-3.1-flash-lite"
 RETRYABLE_STATUSES = {404, 408, 429, 500, 502, 503, 504}
 RETRYABLE_ERROR_TYPES = {
     "not_found", "rate_limit_exceeded", "provider_overloaded", "provider_unavailable", "timeout", "server",
@@ -27,8 +28,11 @@ class OpenRouterChatSession(OpenAICompatibleChatSession):
         model = settings.OPENROUTER_MODEL.strip()
         if not api_key:
             raise RuntimeError("Chatbot chưa được cấu hình OPENROUTER_API_KEY trên máy chủ.")
-        if model != FREE_MODEL_ROUTER and not model.endswith(":free"):
-            raise RuntimeError("OPENROUTER_MODEL phải là openrouter/free hoặc một model có hậu tố :free.")
+        if model not in {FREE_MODEL_ROUTER, PAID_FLASH_LITE} and not model.endswith(":free"):
+            raise RuntimeError(
+                f"OPENROUTER_MODEL phải là {FREE_MODEL_ROUTER}, một model có hậu tố :free "
+                f"hoặc {PAID_FLASH_LITE}."
+            )
         super().__init__(
             api_key, model, "https://openrouter.ai/api/v1",
             request_options={"provider": {"require_parameters": True, "data_collection": "deny"}},
@@ -39,7 +43,7 @@ class OpenRouterChatSession(OpenAICompatibleChatSession):
             try:
                 return await super()._complete(allow_tools=allow_tools)
             except _OpenRouterCompletionError as error:
-                if self.model == FREE_MODEL_ROUTER or not error.retryable:
+                if not self.model.endswith(":free") or not error.retryable:
                     raise
                 self.model = FREE_MODEL_ROUTER
                 # Reasoning data can carry signatures tied to the original model.
@@ -52,11 +56,18 @@ class OpenRouterChatSession(OpenAICompatibleChatSession):
         except _OpenRouterCompletionError as error:
             status = error.status
             if status == 429:
-                message = "OpenRouter đang giới hạn lượt gọi miễn phí. Bạn thử lại sau nhé."
+                message = (
+                    "Gemini Flash Lite trên OpenRouter đang giới hạn tần suất. Bạn thử lại sau nhé."
+                    if self.model == PAID_FLASH_LITE
+                    else "OpenRouter đang giới hạn lượt gọi miễn phí. Bạn thử lại sau nhé."
+                )
             elif status in (401, 403):
                 message = "OpenRouter từ chối API key. Hãy kiểm tra OPENROUTER_API_KEY trên Render."
+            elif status == 402:
+                message = "Kiểm tra số dư credit và hạn mức chi tiêu của API key trên OpenRouter."
             elif status in RETRYABLE_STATUSES:
-                message = "Model miễn phí trên OpenRouter đang không phục vụ được yêu cầu. Bạn thử lại sau nhé."
+                name = "Gemini Flash Lite" if self.model == PAID_FLASH_LITE else "Model miễn phí"
+                message = f"{name} trên OpenRouter đang không phục vụ được yêu cầu. Bạn thử lại sau nhé."
             else:
                 message = f"OpenRouter không xử lý được yêu cầu (HTTP {status})."
             raise RuntimeError(message) from error

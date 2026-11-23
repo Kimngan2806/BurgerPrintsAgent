@@ -9,10 +9,15 @@ from agent.openrouter_agent import OpenRouterChatSession
 from core.config import settings
 
 
-@pytest.mark.parametrize("provider_name", ["openrouter", "vietcod"])
-def test_openai_compatible_provider_uses_catalog_result_to_finish_chat(monkeypatch, provider_name):
+@pytest.mark.parametrize(("provider_name", "model"), [
+    ("openrouter", "cohere/north-mini-code:free"),
+    ("openrouter", "google/gemini-3.1-flash-lite"),
+    ("vietcod", "gemini-3.8-flash-high"),
+])
+def test_openai_compatible_provider_uses_catalog_result_to_finish_chat(monkeypatch, provider_name, model):
     monkeypatch.setattr(settings, "PRIMARY_MODEL_PROVIDER", provider_name)
     monkeypatch.setattr(settings, f"{provider_name.upper()}_API_KEY", "test-key")
+    monkeypatch.setattr(settings, f"{provider_name.upper()}_MODEL", model)
     monkeypatch.setattr(gemini_agent, "MAX_TOOL_ROUNDS", 1)
     requests = []
 
@@ -20,13 +25,12 @@ def test_openai_compatible_provider_uses_catalog_result_to_finish_chat(monkeypat
         assert request.headers["authorization"] == "Bearer test-key"
         payload = json.loads(request.content)
         requests.append(payload)
+        assert payload["model"] == model
         if provider_name == "openrouter":
             assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
-            assert payload["model"].endswith(":free")
             assert payload["provider"] == {"require_parameters": True, "data_collection": "deny"}
         else:
             assert str(request.url) == "https://router.vietcod.com/v1/chat/completions"
-            assert payload["model"] == "gemini-3.8-flash-high"
             assert payload["stream"] is False
         if len(requests) == 1:
             assert any(tool["function"]["name"] == "search_products" for tool in payload["tools"])
@@ -51,7 +55,7 @@ def test_openai_compatible_provider_uses_catalog_result_to_finish_chat(monkeypat
     monkeypatch.setattr(gemini_agent, "execute_tool", catalog)
 
     async def chat():
-        return [event["data"] async for event in gemini_agent.process_chat(f"{provider_name}-test", "Tìm áo thun")]
+        return [event["data"] async for event in gemini_agent.process_chat(f"{provider_name}-{model}-test", "Tìm áo thun")]
 
     events = asyncio.run(chat())
     assert events[-1] == "[DONE]"
@@ -144,3 +148,23 @@ def test_openrouter_retry_is_bounded(router_transport, status, headers, expected
         asyncio.run(OpenRouterChatSession().send_user_message("So sánh hoodie"))
 
     assert models == expected_models
+
+
+@pytest.mark.parametrize(("status", "expected_message"), [
+    (402, "số dư credit"),
+    (429, "Gemini Flash Lite trên OpenRouter đang giới hạn tần suất"),
+    (503, "Gemini Flash Lite trên OpenRouter đang không phục vụ được yêu cầu"),
+])
+def test_flash_lite_reports_paid_provider_error(router_transport, monkeypatch, status, expected_message):
+    model = "google/gemini-3.1-flash-lite"
+    monkeypatch.setattr(settings, "OPENROUTER_MODEL", model)
+    models = []
+
+    def provider(request):
+        models.append(json.loads(request.content)["model"])
+        return httpx.Response(status, json={"error": {"message": "provider error"}})
+
+    router_transport(provider)
+    with pytest.raises(RuntimeError, match=expected_message):
+        asyncio.run(OpenRouterChatSession().send_user_message("So sánh hoodie"))
+    assert models == [model]
