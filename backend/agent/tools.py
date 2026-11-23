@@ -55,14 +55,14 @@ get_sku_info_func = dict(
 # =======================================================
 get_base_cost_func = dict(
     name="get_base_cost",
-    description="[REALTIME] Láº¥y giÃ¡ sáº£n xuáº¥t (base cost) cáº­p nháº­t nháº¥t cá»§a má»™t hoáº·c nhiá»u SKU codes. LuÃ´n gá»i hÃ m nÃ y Ä‘á»ƒ bÃ¡o giÃ¡ chÃ­nh xÃ¡c, khÃ´ng Ä‘Æ°á»£c Ä‘oÃ¡n.",
+    description="Đọc giá gốc USD của SKU đầy đủ từ bản catalog hiện có. Giá chưa gồm phí giao hàng, thuế và phí nền tảng.",
     parameters={
         "type": "object",
         "properties": {
             "sku_codes": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Danh sÃ¡ch cÃ¡c mÃ£ SKU cáº§n láº¥y giÃ¡."
+                "description": "Danh sách mã SKU đầy đủ cần tra giá."
             }
         },
         "required": ["sku_codes"]
@@ -139,14 +139,14 @@ get_shipping_time_func = dict(
 # =======================================================
 check_sku_availability_func = dict(
     name="check_sku_availability",
-    description="[REALTIME] Kiá»ƒm tra tráº¡ng thÃ¡i tá»“n kho vÃ  hoáº¡t Ä‘á»™ng cá»§a SKU (active, inactive, discontinued). KhÃ´ng Ä‘Æ°á»£c recommend SKU inactive.",
+    description="Kiểm tra mã SKU có nằm trong danh sách hết hàng của BurgerPrints hay không. Vắng mặt trong danh sách chưa bảo đảm nhận đơn.",
     parameters={
         "type": "object",
         "properties": {
             "sku_codes": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Danh sÃ¡ch mÃ£ SKU cáº§n check."
+                "description": "Danh sách mã SKU đầy đủ cần kiểm tra."
             }
         },
         "required": ["sku_codes"]
@@ -268,7 +268,7 @@ create_order_func = dict(
 
 get_order_creation_status_func = dict(
     name="get_order_creation_status",
-    description="Kiá»ƒm tra tráº¡ng thÃ¡i báº­t/táº¯t hiá»‡n táº¡i cá»§a tÃ­nh nÄƒng táº¡o Ä‘Æ¡n tá»« Harness. Pháº£i gá»i tool nÃ y thay vÃ¬ tá»± suy Ä‘oÃ¡n tráº¡ng thÃ¡i.",
+    description="Kiểm tra môi trường hiện tại có bật gửi đơn BurgerPrints hay không.",
     parameters={"type": "object"}
 )
 
@@ -290,11 +290,6 @@ TOOL_DECLARATIONS = [
         }}),
     get_sku_info_func,
     get_base_cost_func,
-    get_shipping_cost_func,
-    get_production_time_func,
-    get_shipping_time_func,
     check_sku_availability_func,
-    check_provider_status_func,
-    check_region_support_func,
     get_order_creation_status_func,
 ]

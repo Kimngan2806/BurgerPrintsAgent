@@ -121,3 +121,85 @@ def test_premium_followup_compares_remembered_sku_without_calling_model(tmp_path
     finally:
         owner_context.reset(token)
         store.close()
+
+
+def test_price_and_margin_followups_use_saved_products_without_a_model(tmp_path, monkeypatch):
+    from core import workspace as workspace_module
+    from routers import chat
+
+    workspace = workspace_module.Workspace(tmp_path / 'prices.db')
+    monkeypatch.setattr(workspace_module, 'workspace', workspace)
+    monkeypatch.setattr(chat, 'workspace', workspace)
+    owner = 'seller'
+    products = [
+        {'id': 'TEE', 'name': 'Basic Tee', 'variants': [{'sku_code': 'TEE-ASH-L', 'price': '6.00'}]},
+        {'id': 'RING', 'name': 'Ring-spun Tee', 'variants': [{'sku_code': 'RING-BLK-L', 'price': '5.85'}]},
+    ]
+    conversation = workspace.create(owner, 'conversation', {
+        'messages': [{'role': 'user', 'content': 'Mình muốn bán áo thun.'},
+                     {'role': 'agent', 'content': 'Đây là hai mẫu mình tìm được.', 'products': products}],
+        'products': products,
+    })
+
+    async def lookup(name, args, **kwargs):
+        assert name == 'get_base_cost'
+        assert args['sku_codes'] == ['TEE-ASH-L', 'RING-BLK-L']
+        return {'TEE-ASH-L': '5.00', 'RING-BLK-L': '5.85'}
+
+    def unexpected_model(*args, **kwargs):
+        pytest.fail('Pricing questions with catalog data should not call the model')
+
+    monkeypatch.setattr(gemini_agent, 'execute_tool', lookup)
+    monkeypatch.setattr(gemini_agent, 'process_chat_provider', unexpected_model)
+
+    async def send(message):
+        request = chat.ChatRequest(session_id=conversation['id'], message=message)
+        lease = chat.start_chat(owner, request)
+        return [json.loads(event['data']) async for event in chat.stream(owner, request, lease)
+                if event['data'] != '[DONE]']
+
+    prices = asyncio.run(send('giá sản phẩm này bao nhiêu và tôi nên bán với giá bao nhiêu là lời'))
+    followup = asyncio.run(send('Tôi bán Etsy US và muốn margin trên 40%'))
+    assert len(prices) == len(followup) == 1
+    assert '5,00 USD (giá gốc catalog)' in prices[0]['text']
+    assert '6,00 USD' not in prices[0]['text']
+    assert '8,34 USD' in followup[0]['text']
+    assert '9,76 USD' in followup[0]['text']  # $9.75 would give exactly 40%.
+    assert all(f'**{heading}**' in followup[0]['text'] for heading in ('Đề xuất', 'Lý do', 'Điểm đánh đổi'))
+    assert 'phí giao' in followup[0]['text']
+    saved = workspace.get(owner, conversation['id'], 'conversation')
+    assert saved['messages'][-1]['content'] == followup[0]['text']
+    assert 'products' not in saved['messages'][-1]
+    assert saved['products'] == products
+
+
+def test_localizes_english_terms_without_rewriting_the_model_answer(monkeypatch):
+    class Model:
+        async def send_user_message(self, text, *, allow_tools=True):
+            assert allow_tools, 'Ordinary terms should be translated locally'
+            return {'text': '**Recommendation:** Nếu giá gốc là 10 USD thì hãy tính gross margin sau phí giao.',
+                    'tool_calls': []}
+
+    monkeypatch.setattr(settings, 'PRIMARY_MODEL_PROVIDER', 'openrouter')
+    monkeypatch.setattr(gemini_agent, 'OpenRouterChatSession', Model)
+    text = asyncio.run(answer('Cách định giá sản phẩm in theo yêu cầu?'))
+    assert '**Đề xuất:**' in text and 'biên lợi nhuận gộp' in text
+
+
+def test_model_failure_after_catalog_lookup_still_returns_catalog_facts(monkeypatch):
+    class Model:
+        async def send_user_message(self, text):
+            return {'text': '', 'tool_calls': [{'name': 'search_products', 'args': {'query': 'mug'}}]}
+
+        async def send_tool_results(self, calls, results, *, allow_tools=True):
+            raise TimeoutError()
+
+    async def lookup(*args, **kwargs):
+        return {'results': [{'name': 'Ceramic Mug', 'variants': [{'sku_code': 'MUG-11', 'price': '4.60'}]}]}
+
+    monkeypatch.setattr(settings, 'PRIMARY_MODEL_PROVIDER', 'openrouter')
+    monkeypatch.setattr(gemini_agent, 'OpenRouterChatSession', Model)
+    monkeypatch.setattr(gemini_agent, 'execute_tool', lookup)
+    text = asyncio.run(answer('Có cốc nào để in hình không?'))
+    assert 'MUG-11' in text and '4.60 USD' in text
+    assert 'phí giao tính riêng' in text

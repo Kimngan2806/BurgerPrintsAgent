@@ -12,17 +12,57 @@ VIETNAMESE_PLAIN = re.compile(
 )
 ENGLISH_MARKERS = re.compile(
     r'\b(?:the|this|these|that|those|you|your|we|our|would|could|should|is|are|can|'
-    r'hi|hello|thanks|find|show|any|recommend|recommendation|trade-off|reasoning|found|budget-friendly|beginner)\b'
+    r'it|its|more|less|than|with|from|hi|hello|thanks|find|show|any|recommend|recommendation|'
+    r'trade-off|reasoning|found|budget-friendly|beginner)\b'
 )
 ENGLISH_LABELS = re.compile(
     r'^\s*(?:[#>*\-]+\s*)*(?:recommendation|reasoning|trade-off|best value|why it works|'
     r'budget strategy|base cost|pros|cons)(?=$|[ :*—\-])', re.IGNORECASE | re.MULTILINE,
 )
-UNTRANSLATED_VI_TERMS = re.compile(
-    r'\b(?:budget[ -]friendly|beginner|recommendation|reasoning|trade[ -]off|base cost|'
-    r'best value|size range|adult sizing|shipping cost|premium feel|gross margin|blank product|print.on.demand)\b',
-    re.IGNORECASE,
-)
+VIETNAMESE_HEADING = re.compile(r'^\s*(?:[#>*\-]+\s*)*(?:đề xuất|lý do|điểm đánh đổi)\s*\**\s*:\s*\**\s*')
+VIETNAMESE_TERMS = {
+    'budget friendly': 'tiết kiệm',
+    'beginner': 'người mới',
+    'recommendation': 'đề xuất',
+    'reasoning': 'lý do',
+    'trade off': 'điểm đánh đổi',
+    'base cost': 'giá gốc',
+    'best value': 'đáng tiền nhất',
+    'size range': 'dải kích cỡ',
+    'adult sizing': 'cỡ người lớn',
+    'shipping cost': 'phí giao hàng',
+    'premium feel': 'cảm giác cao cấp',
+    'gross margin': 'biên lợi nhuận gộp',
+    'margin': 'biên lợi nhuận',
+    'blank product': 'sản phẩm phôi',
+    'print on demand': 'in theo yêu cầu',
+    'fulfillment': 'xử lý đơn',
+    'marketplace': 'sàn bán hàng',
+    'price point': 'mức giá',
+    'premium': 'cao cấp',
+    'shipping': 'giao hàng',
+    'size': 'cỡ',
+}
+TRANSLATABLE_TERMS = r'\b(?P<term>' + '|'.join(
+    re.escape(term).replace(r'\ ', r'[ -]') for term in VIETNAMESE_TERMS
+) + r')\b'
+
+
+def localize_terms(text: str, names=()) -> str:
+    if not has_vietnamese(text):
+        return text
+    exact_names = sorted((name for name in names if name), key=len, reverse=True)
+    protected = [r'`[^`]*`', r'https?://[^\s)]+', *(re.escape(name) for name in exact_names)]
+    tokens = re.compile('|'.join([*protected, TRANSLATABLE_TERMS]), re.IGNORECASE)
+
+    def translate(match):
+        word = match['term']
+        if word is None:
+            return match[0]
+        translation = VIETNAMESE_TERMS[word.casefold().replace('-', ' ')]
+        return translation.capitalize() if word[0].isupper() else translation
+
+    return tokens.sub(translate, text)
 
 
 def has_vietnamese(text: str) -> bool:
@@ -55,14 +95,18 @@ def language_instruction(language: str) -> str:
     return 'Required reply language: write entirely in English, including headings and follow-up questions.'
 
 
-def matches_reply_language(text: str, language: str) -> bool:
+def matches_reply_language(text: str, language: str, names=()) -> bool:
     if not text.strip():
         return False
     # Codes and exact catalog names in code formatting are language neutral.
     prose = re.sub(r'`[^`]*`|https?://\S+', '', text)
+    for name in sorted((name for name in names if name), key=len, reverse=True):
+        if name:
+            prose = re.sub(re.escape(name), '', prose, flags=re.IGNORECASE)
     if language == 'en':
         return not has_vietnamese(prose)
-    if ENGLISH_LABELS.search(prose) or UNTRANSLATED_VI_TERMS.search(prose) or not has_vietnamese(prose):
+    if ENGLISH_LABELS.search(prose) or re.search(TRANSLATABLE_TERMS, prose, re.IGNORECASE) or not has_vietnamese(prose):
         return False
     sentences = re.split(r'(?<=[.!?])\s+|\n+', prose.casefold())
-    return not any(not has_vietnamese(line) and len(ENGLISH_MARKERS.findall(line)) >= 2 for line in sentences)
+    return not any(not has_vietnamese(line) and len(ENGLISH_MARKERS.findall(line)) >= 2
+                   for sentence in sentences if (line := VIETNAMESE_HEADING.sub('', sentence)))

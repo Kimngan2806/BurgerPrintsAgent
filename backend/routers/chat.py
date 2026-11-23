@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import secrets
 import time
 from importlib import import_module
@@ -8,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 from api.models import ChatRequest, ChatResponse
+from agent.language import reply_language
 from core.workspace import current_owner, workspace
 from core.chat_context import owner_context, conversation_context, tool_events
 from services.chat_order import (
@@ -16,6 +18,7 @@ from services.chat_order import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def start_chat(owner, request):
@@ -32,7 +35,8 @@ def start_chat(owner, request):
 def record_chat_message(owner, request):
     conversation = workspace.get(owner, request.session_id, 'conversation')
     body = {k: v for k, v in conversation.items() if k not in {'id', 'version', 'updated_at'}}
-    body['title'] = request.message[:65] if not body['messages'] else body['title']
+    if not body['messages'] or not body.get('title'):
+        body['title'] = request.message[:65]
     body['messages'].append({'id': secrets.token_hex(8), 'role': 'user', 'content': request.message})
     return workspace.update(owner, request.session_id, 'conversation', conversation['version'], body)
 
@@ -119,10 +123,18 @@ async def stream(owner, request, lease):
     except (asyncio.CancelledError, GeneratorExit):
         failed = True
         raise
-    except Exception:
+    except Exception as exc:
         failed = True
-        content += '\nPhản hồi bị gián đoạn. Vui lòng thử lại.'
-        yield {'data': json.dumps({'error': 'Phản hồi gián đoạn. Vui lòng thử lại.'})}
+        logger.warning("Chat stream failed: %s", type(exc).__name__)
+        vi = reply_language(request.message) == 'vi'
+        if isinstance(exc, TimeoutError):
+            notice = ('Lượt này mất quá nhiều thời gian. Bạn có thể gửi lại riêng phần muốn hỏi trước.'
+                      if vi else 'This turn took too long. Try sending the part you want help with first.')
+        else:
+            notice = ('Kết nối bị gián đoạn. Mở lại hội thoại để tiếp tục với nội dung đã lưu.'
+                      if vi else 'The connection was interrupted. Open the conversation to continue from saved messages.')
+        content += ('\n\n' if content else '') + notice
+        yield {'data': json.dumps({'error': notice})}
     finally:
         try:
             # SSE disconnect cancels the stream. Finish persisting the turn and
@@ -152,8 +164,8 @@ async def chat_sync(request: ChatRequest, owner=Depends(current_owner)):
     async for event in stream(owner, request, lease):
         if event['data'] != '[DONE]':
             data = json.loads(event['data'])
-            if data.get('text'):
-                chunks.append(data['text'])
+            if part := data.get('text') or data.get('error'):
+                chunks.append(part)
     return ChatResponse(response=''.join(chunks), session_id=request.session_id)
 
 

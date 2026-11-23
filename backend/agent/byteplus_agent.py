@@ -13,6 +13,13 @@ def build_openai_tools() -> List[Dict[str, Any]]:
     return [{"type": "function", "function": deepcopy(tool)} for tool in TOOL_DECLARATIONS]
 
 
+def _tool_arguments(value):
+    try:
+        return json.loads(value or "{}")
+    except (ValueError, TypeError):
+        return None
+
+
 class OpenAICompatibleChatSession:
     def __init__(self, api_key: str, model: str, base_url: str, *, request_options=None):
         self.api_key = api_key
@@ -90,7 +97,7 @@ class OpenAICompatibleChatSession:
                 {
                     "id": call["id"],
                     "name": call["function"]["name"],
-                    "args": json.loads(call["function"].get("arguments") or "{}"),
+                    "args": _tool_arguments(call["function"].get("arguments")),
                 }
                 for call in tool_calls
             ],
