@@ -70,7 +70,6 @@ html, body { height: 100%; }
 .history-list button {display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
 .nav-footer {margin-top:auto;display:flex;flex-direction:column;gap:7px;font-size:12px}
 .nav-footer small {color:var(--text-secondary)}
-.demo-label {display:block;font-size:11px;color:var(--accent-text);padding:7px 0}
 .workspace-main {display:flex;flex-direction:column;flex:1;min-width:0;overflow:hidden}
 .workspace-header {min-height:82px;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 28px;border-bottom:1px solid var(--border)}
 .workspace-header p {margin:0}.workspace-header strong {font-size:15px}

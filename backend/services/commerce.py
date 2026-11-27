@@ -9,7 +9,7 @@ import anyio
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, ConfigDict
 from starlette.concurrency import run_in_threadpool
-from core.config import settings
+from core.config import normalize_store_display_name, settings
 from core.workspace import workspace
 
 
@@ -49,7 +49,7 @@ def draft_body(data):
         if not record:
             raise HTTPException(422, f"SKU phải khớp chính xác: {line['sku']}. Hãy tìm và chọn lại.")
         if line['position'] != 'front':
-            raise HTTPException(422, 'Bản demo chỉ hỗ trợ vị trí in front.')
+            raise HTTPException(422, 'Chọn vị trí in mặt trước cho sản phẩm.')
         line['sku'] = record['sku_code']
     return body
 
@@ -107,7 +107,7 @@ async def build_review(owner, draft, *, chat_confirmation=False):
             'catalog_updated_at': record.get('cached_at'), 'availability': availability.get(line['sku']),
             'file': {'name': asset['name'], 'sha256': asset['sha256'], 'validation': asset['validation']},
             'design_url_front': settings.PUBLIC_FILE_BASE_URL.rstrip('/') + '/api/files/' + asset['share_token']})
-    return {'store': settings.STORE_DISPLAY_NAME, 'sandbox': settings.ORDER_SANDBOX,
+    return {'store': settings.display_store_name, 'sandbox': settings.ORDER_SANDBOX,
         'lines': lines, 'address': {**address, 'country': address['country'].upper()},
         'services': [], 'unknown_costs': ['shipping', 'tax', 'additional fees', 'multi-item price rules'],
         'cost_note': 'Giá catalog theo SKU; chưa phải tổng đơn. Chưa áp dụng 2nd_price/addition_price.',
@@ -165,6 +165,7 @@ async def submit_draft(owner, ident, review_id, *, chat_confirmation=False):
     summary = await build_review(owner, draft, chat_confirmation=chat_confirmation)
     def stable(value):
         value = json.loads(json.dumps(value))
+        value['store'] = normalize_store_display_name(value['store'])
         # Older reviews predate the optional contact fields.
         value['address'] = Address.model_validate(value['address']).model_dump()
         for line in value['lines']:

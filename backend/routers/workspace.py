@@ -38,7 +38,7 @@ def auth(action: str, credentials: Credentials, response: Response, request: Req
     owner = (workspace.register if action == 'register' else workspace.login)(credentials.name, credentials.password)
     response.set_cookie('bp_session', workspace.token(owner), httponly=True,
                         secure=settings.COOKIE_SECURE, samesite='strict', max_age=86400 * 7, path='/')
-    return {'name': credentials.name, 'store': settings.STORE_DISPLAY_NAME, 'mode': 'single_store_demo'}
+    return {'name': credentials.name, 'store': settings.display_store_name, 'mode': 'single_store_demo'}
 
 
 @router.post('/logout')
@@ -54,7 +54,7 @@ def logout(request: Request, response: Response):
 def me(owner=Depends(current_owner)):
     with workspace.connect() as db:
         name = db.execute('SELECT name FROM users WHERE id=?', (owner,)).fetchone()['name']
-    return {'name': name, 'store': settings.STORE_DISPLAY_NAME, 'mode': 'single_store_demo',
+    return {'name': name, 'store': settings.display_store_name, 'mode': 'single_store_demo',
             'sandbox': settings.ORDER_SANDBOX, 'submission_enabled': settings.ENABLE_ORDER_SUBMISSION}
 
 

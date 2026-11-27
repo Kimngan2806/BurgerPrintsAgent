@@ -1,5 +1,14 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
+def normalize_store_display_name(value: str) -> str:
+    name = value.strip()
+    # Existing deployments may still have the old placeholder in their environment.
+    if name.casefold() in {"", "burgerprints demo", "store demo cấu hình trên máy chủ"}:
+        return "BurgerPrints"
+    return name
+
+
 class Settings(BaseSettings):
     # BurgerPrints API
     BURGERPRINTS_API_KEY: str = ""
@@ -35,7 +44,7 @@ class Settings(BaseSettings):
     WORKSPACE_DATABASE_URL: str = ""
     FILE_STORAGE_PATH: str = "data/designs"
     PUBLIC_FILE_BASE_URL: str = ""
-    STORE_DISPLAY_NAME: str = "Store demo cấu hình trên máy chủ"
+    STORE_DISPLAY_NAME: str = "BurgerPrints"
     ORDER_SANDBOX: bool = True
     ENABLE_ORDER_SUBMISSION: bool = False
     STORE_TRANSACTION_NOTICE: str = ""
@@ -45,5 +54,9 @@ class Settings(BaseSettings):
     CATALOG_MAX_AGE_SECONDS: int = 86400
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @property
+    def display_store_name(self) -> str:
+        return normalize_store_display_name(self.STORE_DISPLAY_NAME)
 
 settings = Settings()

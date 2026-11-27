@@ -13,7 +13,7 @@ services:
       - key: PRIMARY_MODEL_PROVIDER
         value: gemini
       - key: STORE_DISPLAY_NAME
-        value: BurgerPrints Demo
+        value: BurgerPrints
       - key: COOKIE_SECURE
         value: "true"
       - key: WORKSPACE_DB_PATH

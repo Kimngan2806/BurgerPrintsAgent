@@ -23,7 +23,7 @@ Có thể dùng file `render.yaml` tại thư mục gốc để tạo cùng cấ
 ```dotenv
 PRIMARY_MODEL_PROVIDER=gemini
 COOKIE_SECURE=true
-STORE_DISPLAY_NAME=BurgerPrints Demo
+STORE_DISPLAY_NAME=BurgerPrints
 WORKSPACE_DATABASE_URL=postgresql://...
 WORKSPACE_DB_PATH=/app/data/workspace.sqlite3
 DUCKDB_PATH=/app/data/catalog.duckdb
