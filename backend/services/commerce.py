@@ -5,6 +5,7 @@ import secrets
 import re
 import time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path
 import anyio
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, ConfigDict
@@ -86,10 +87,17 @@ async def build_review(owner, draft, *, chat_confirmation=False):
     if not chat_confirmation and not draft['acknowledge_unverified_print']:
         raise HTTPException(422, 'Chưa có quy chuẩn theo SKU. Cần tự đối chiếu template và xác nhận trước khi duyệt đơn.')
     if any(not line.get('asset_id') for line in draft['lines']):
-        raise HTTPException(422, 'Vui lòng gửi URL ảnh thiết kế công khai hoặc chọn file cho từng SKU.')
+        missing = [str(index) for index, line in enumerate(draft['lines'], 1) if not line.get('asset_id')]
+        raise HTTPException(422, 'Tải hoặc chọn ảnh mặt trước cho dòng ' + ', '.join(missing) + ' trong đơn nháp.')
+    assets = []
+    for index, line in enumerate(draft['lines'], 1):
+        asset = await run_in_threadpool(workspace.get, owner, line['asset_id'], 'asset')
+        if not (Path(settings.FILE_STORAGE_PATH) / asset['storage_name']).is_file():
+            raise HTTPException(422, f"Không tìm thấy tệp ảnh ở dòng {index} ({line['sku']}). Tải ảnh lên lại để duyệt đơn.")
+        assets.append(asset)
     availability = await BurgerPrintsClient().check_sku_availability([line['sku'] for line in draft['lines']])
     lines = []
-    for line in draft['lines']:
+    for line, asset in zip(draft['lines'], assets):
         record = db_store.get_sku_by_code(line['sku'])
         if not record:
             raise HTTPException(422, 'SKU không còn trong catalog. Chọn lại biến thể.')
@@ -97,7 +105,6 @@ async def build_review(owner, draft, *, chat_confirmation=False):
             raise HTTPException(422, f"SKU {line['sku']} đang có trong danh sách hết hàng.")
         if not record.get('cached_at') or time.time() - record['cached_at'] > settings.CATALOG_MAX_AGE_SECONDS:
             raise HTTPException(422, 'Catalog đã cũ. Đồng bộ lại trước khi duyệt đơn.')
-        asset = await run_in_threadpool(workspace.get, owner, line['asset_id'], 'asset')
         if not settings.PUBLIC_FILE_BASE_URL.startswith('https://'):
             raise HTTPException(422, 'Cần cấu hình PUBLIC_FILE_BASE_URL HTTPS để fulfillment đọc file đã lưu.')
         product = db_store.get_product_by_id(record['product_id']) or {}
@@ -250,9 +257,11 @@ def profit(data):
             unknown.append(key)
         else:
             costs[key] = amount(value) * (quantity if key == 'production_per_item' else 1)
-    earnings = revenue - sum(costs.values())
+    total_costs = sum(costs.values(), Decimal('0'))
+    earnings = revenue - total_costs
     fmt = lambda v: str(v.quantize(Decimal('.01'), rounding=ROUND_HALF_UP))
     return {'revenue': fmt(revenue), 'costs': {k: fmt(v) for k, v in costs.items()},
-        'estimated_profit': fmt(earnings), 'margin_percent': fmt(earnings / revenue * 100) if revenue else None,
+        'estimated_profit': fmt(earnings), 'total_known_costs': fmt(total_costs), 'profit_per_item': fmt(earnings / quantity),
+        'margin_percent': fmt(earnings / revenue * 100) if revenue else None,
         'unknown_costs': unknown, 'source': 'seller_inputs', 'currency': 'USD',
         'note': 'Lợi nhuận dự kiến theo chi phí đã nhập; chưa phải lợi nhuận ròng.'}

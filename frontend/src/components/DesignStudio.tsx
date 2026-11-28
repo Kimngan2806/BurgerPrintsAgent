@@ -3,7 +3,8 @@
 import dynamic from 'next/dynamic';
 import {useEffect, useRef, useState} from 'react';
 import {Box, ChevronLeft, ChevronRight, ImagePlus, Link2, Search, X} from 'lucide-react';
-import {api, apiUrl} from '@/lib/api';
+import {api} from '@/lib/api';
+import {designFormats, designPreviewUrl, uploadDesign, type DesignAsset} from '@/lib/designs';
 import {centeredArtwork, mockupLabels, type MockupKind, type Placement} from '@/lib/mockup-types';
 
 const MockupViewer = dynamic(() => import('./MockupViewer'), {
@@ -11,29 +12,23 @@ const MockupViewer = dynamic(() => import('./MockupViewer'), {
   loading: () => <div className="mockup-stage mockup-fallback" role="status">Đang mở chế độ xem 3D…</div>,
 });
 
-export type DesignAsset = {
-  id: string;
-  version: number;
-  name: string;
-  tags: string;
-  file_version: number;
-  sha256: string;
-  validation: {width: number; height: number; message: string};
-};
-
 type StudioProps = {
   assets: DesignAsset[];
   busy: boolean;
   refreshLists: () => Promise<void>;
   run: (action: () => Promise<void>) => Promise<void>;
   onNotice: (message: string) => void;
+  initialAsset?: DesignAsset;
+  draftLink?: {index: number; productId: string; color?: string};
+  draftLines: string[];
+  onAttach: (asset: DesignAsset, index: number) => void;
+  onReturn: () => void;
 };
 type CatalogProduct = {id: string; name: string; kind: MockupKind};
 type CatalogPage = {results: CatalogProduct[]; has_more: boolean; catalog_ready: boolean};
 type CatalogKind = {kind: MockupKind; count: number};
 type CatalogColor = {name: string; hex: string | null};
 type ColorOption = {key: string; name: string; hex: string; exact: boolean};
-type Artwork = {url: string; name: string; assetId?: string};
 
 const PAGE_SIZE = 30;
 const NEUTRAL = '#f9f8f5';
@@ -60,29 +55,28 @@ function colorOptions(colors: CatalogColor[]) {
   return Array.from(options.values()).filter(color => color.exact || !exactNames.has(color.name.trim().toLowerCase()));
 }
 
-function assetUrl(asset: DesignAsset) {
-  return apiUrl('/assets/' + encodeURIComponent(asset.id) + '/preview');
-}
-
-export default function DesignStudio({assets, busy, refreshLists, run, onNotice}: StudioProps) {
-  const [kind, setKind] = useState<MockupKind | 'all'>('t-shirt');
+export default function DesignStudio({
+  assets, busy, refreshLists, run, onNotice, initialAsset, draftLink, draftLines, onAttach, onReturn,
+}: StudioProps) {
+  const [kind, setKind] = useState<MockupKind | 'all'>(draftLink ? 'all' : 't-shirt');
   const [kinds, setKinds] = useState<CatalogKind[]>([]);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(draftLink?.productId ?? '');
   const [page, setPage] = useState(0);
   const [retry, setRetry] = useState(0);
   const [catalog, setCatalog] = useState<{key: string; data?: CatalogPage; error?: string}>();
-  const [productId, setProductId] = useState('');
+  const [productId, setProductId] = useState(draftLink?.productId ?? '');
   const [colors, setColors] = useState<{id: string; options?: ColorOption[]; error?: boolean}>();
   const [colorKey, setColorKey] = useState('');
-  const [artwork, setArtwork] = useState<Artwork>();
+  const [artwork, setArtwork] = useState(initialAsset);
   const [scale, setScale] = useState(100);
   const [position, setPosition] = useState<Placement>(centeredArtwork);
   const [removeBackground, setRemoveBackground] = useState(true);
   const [previousAsset, setPreviousAsset] = useState('');
   const [assetQuery, setAssetQuery] = useState('');
-  const [editor, setEditor] = useState<'products' | 'artwork'>('products');
+  const [editor, setEditor] = useState<'products' | 'artwork'>(draftLink ? 'artwork' : 'products');
+  const [targetLine, setTargetLine] = useState(draftLink?.index ?? 0);
   const top = useRef<HTMLDivElement>(null);
-  const localImageUrl = artwork?.url.startsWith('blob:') ? artwork.url : undefined;
+  const artworkUrl = artwork ? designPreviewUrl(artwork.id) : undefined;
   const catalogKey = JSON.stringify([kind, query.trim(), page, retry]);
   const currentCatalog = catalog?.key === catalogKey ? catalog : undefined;
   const products = currentCatalog?.data?.results ?? [];
@@ -124,35 +118,24 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
       if (abort.signal.aborted) return;
       const options = colorOptions(data.colors);
       setColors({id, options});
-      setColorKey(options[0]?.key ?? '');
+      const initialColor = id === draftLink?.productId ? draftLink.color?.trim().toLowerCase() : undefined;
+      setColorKey((options.find(option => option.name.trim().toLowerCase() === initialColor) ?? options[0])?.key ?? '');
     }).catch(() => {if (!abort.signal.aborted) setColors({id, error: true});});
     return () => abort.abort();
-  }, [product?.id, retry]);
-
-  useEffect(() => () => {if (localImageUrl) URL.revokeObjectURL(localImageUrl);}, [localImageUrl]);
+  }, [product?.id, retry, draftLink?.productId, draftLink?.color]);
 
   function useAsset(asset: DesignAsset) {
-    if (artwork?.assetId !== asset.id) setPosition(centeredArtwork);
-    setArtwork({url: assetUrl(asset), name: asset.name, assetId: asset.id});
+    if (artwork?.id !== asset.id) setPosition(centeredArtwork);
+    setArtwork(asset);
     setEditor('artwork');
   }
 
   function upload(file: File) {
-    if (file.size > 25 * 1024 * 1024) {
-      void run(async () => {throw new Error('Ảnh vượt quá giới hạn 25 MB.');});
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    setArtwork({url, name: file.name});
-    setPosition(centeredArtwork);
     void run(async () => {
-      const data = new FormData();
-      data.set('file', file);
-      const params = new URLSearchParams({previous_id: previousAsset});
-      const asset = await api<DesignAsset>('/assets/upload?' + params, 'POST', data);
-      setArtwork(current => current?.url === url ? {...current, name: asset.name, assetId: asset.id} : current);
+      const asset = await uploadDesign(file, previousAsset);
+      useAsset(asset);
       await refreshLists();
-      onNotice('Đã lưu file gốc vào thư viện.');
+      onNotice(draftLines.length ? 'Đã lưu ảnh. Bấm Gắn ảnh vào đơn nháp để dùng ảnh cho SKU.' : 'Đã lưu ảnh vào thư viện.');
     });
   }
 
@@ -174,6 +157,24 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
       <span className="studio-icon"><Box size={23} /></span>
       <h1>Thiết kế trên mẫu 3D</h1>
     </div>
+    {draftLines.length > 0 && <div className="studio-draft-link">
+      <div>
+        <label>Gắn ảnh vào dòng SKU
+          <select value={draftLines[targetLine] ? targetLine : ''} onChange={event => setTargetLine(Number(event.currentTarget.value))}
+            disabled={busy}>
+            <option value="" disabled>Chọn dòng SKU</option>
+            {draftLines.map((sku, index) => <option key={index} value={index}>Dòng {index + 1} · {sku}</option>)}
+          </select>
+        </label>
+        <p className="muted">{artwork ? 'Đơn nháp dùng ảnh gốc. Vị trí trên mẫu 3D để xem thử.'
+          : 'Tải ảnh lên hoặc chọn một ảnh đã lưu bên dưới.'}</p>
+      </div>
+      <div className="studio-draft-actions">
+        <button type="button" className="primary" disabled={busy || !artwork || !draftLines[targetLine]}
+          onClick={() => {if (artwork) onAttach(artwork, targetLine);}}>Gắn ảnh vào đơn nháp</button>
+        <button type="button" disabled={busy} onClick={onReturn}>Về đơn nháp</button>
+      </div>
+    </div>}
     <div className="studio-grid">
       <div className="studio-controls">
         <div className="studio-editor-switch" role="group" aria-label="Bảng chỉnh thiết kế">
@@ -230,14 +231,14 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
         </div>
         <div className="studio-section" hidden={editor !== 'artwork'}>
           {artwork && <div className="studio-artwork">
-            <img src={artwork.url} alt="" />
+            <img src={artworkUrl} alt="" />
             <span title={artwork.name}>{artwork.name}</span>
             <button type="button" disabled={busy} onClick={() => setArtwork(undefined)} aria-label="Gỡ ảnh khỏi mẫu"><X size={16} /></button>
           </div>}
           <label className="studio-upload">
             <ImagePlus size={22} />
             <span><strong>{artwork ? 'Đổi ảnh thiết kế' : 'Tải ảnh lên'}</strong><small>PNG, JPEG hoặc WebP · tối đa 25 MB</small></span>
-            <input type="file" aria-label="Tải ảnh thiết kế" accept="image/png,image/jpeg,image/webp" disabled={busy}
+            <input type="file" aria-label="Tải ảnh thiết kế" accept={designFormats} disabled={busy}
               onChange={event => {const file = event.target.files?.[0]; event.target.value = ''; if (file) upload(file);}} />
           </label>
           {artwork && <>
@@ -288,7 +289,7 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
       </div>
       <div className="studio-preview">
         <MockupViewer kind={modelKind} color={color?.hex ?? NEUTRAL} productName={product?.name}
-          artworkUrl={artwork?.url} scale={scale / 100} position={position} onPositionChange={setPosition}
+          artworkUrl={artworkUrl} scale={scale / 100} position={position} onPositionChange={setPosition}
           removeBackground={removeBackground} />
       </div>
     </div>
@@ -301,11 +302,11 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
       </div>
       <div className="asset-grid">
         {filteredAssets.map(asset => <article className="asset-card" key={asset.id}>
-          <img src={assetUrl(asset)} alt={asset.name + ' · v' + asset.file_version} loading="lazy" />
+          <img src={designPreviewUrl(asset.id)} alt={asset.name + ' · v' + asset.file_version} loading="lazy" />
           <h3>{asset.name} · v{asset.file_version}</h3>
           <p>{asset.validation.width} × {asset.validation.height} px</p>
           <p className="muted">{asset.validation.message}</p>
-          <button type="button" disabled={busy} aria-pressed={artwork?.assetId === asset.id} onClick={() => {
+          <button type="button" disabled={busy} aria-pressed={artwork?.id === asset.id} onClick={() => {
             useAsset(asset);
             top.current?.scrollIntoView({behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
           }}>Xem trên sản phẩm</button>
@@ -316,7 +317,7 @@ export default function DesignStudio({assets, busy, refreshLists, run, onNotice}
               const data = Object.fromEntries(new FormData(event.currentTarget));
               void run(async () => {
                 const saved = await api<DesignAsset>('/assets/' + encodeURIComponent(asset.id), 'PATCH', {version: asset.version, ...data});
-                if (artwork?.assetId === asset.id) useAsset(saved);
+                if (artwork?.id === asset.id) useAsset(saved);
                 await refreshLists();
               });
             }}>

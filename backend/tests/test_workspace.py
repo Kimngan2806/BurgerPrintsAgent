@@ -325,10 +325,25 @@ def test_asset_file_versions_and_print_level(env):
     assert validate_design_bytes(image_bytes()).code == 'BASIC_VALID_PRINT_UNVERIFIED'
 
 
+def test_review_reports_the_draft_line_if_saved_design_file_is_missing(env):
+    from pathlib import Path
+
+    _, client = env
+    register(client)
+    draft, asset = ready_draft(client)
+    (Path(settings.FILE_STORAGE_PATH) / asset['sha256']).unlink()
+    response = client.post(f"/api/drafts/{draft['id']}/review", json={'version': draft['version']})
+    assert response.status_code == 422
+    assert 'dòng 1 (TEE-BLACK-M)' in response.json()['detail']
+    assert 'Tải ảnh lên lại' in response.json()['detail']
+
+
 def test_profit_unknowns_zero_revenue_and_exact_decimal():
     result = commerce.profit({'sale_price': '10.10', 'quantity': 3, 'discount_percent': '10', 'production_per_item': '2.20'})
     assert result['revenue'] == '27.27'
     assert result['estimated_profit'] == '20.67'
+    assert result['total_known_costs'] == '6.60'
+    assert result['profit_per_item'] == '6.89'
     assert 'shipping_total' in result['unknown_costs']
     assert commerce.profit({'sale_price': 0})['margin_percent'] is None
     for bad in ['NaN', '-1', 'Infinity']:

@@ -419,7 +419,7 @@ def support(data: SupportInput, owner=Depends(current_owner)):
     if data.reference:
         with workspace.connect() as db:
             if not db.execute('SELECT 1 FROM submissions WHERE reference=? AND owner=?', (data.reference, owner)).fetchone():
-                raise HTTPException(404)
+                raise HTTPException(404, 'Không tìm thấy đơn đã chọn trong tài khoản.')
     return workspace.create(owner, 'support', {'message': data.message, 'reference': data.reference,
         'status': 'saved_locally', 'note': 'Đã lưu yêu cầu trong ứng dụng; chưa gửi ra ngoài. Chưa thực hiện hủy/hoàn tiền.'})
 
