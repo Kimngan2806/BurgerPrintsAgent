@@ -38,6 +38,8 @@ class Workspace:
         with self.connect(lock='workspace-schema-v1') as db:
             schema = f'''
                 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, name TEXT UNIQUE, password TEXT);
+                CREATE TABLE IF NOT EXISTS google_identities(
+                    subject TEXT PRIMARY KEY, owner TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE);
                 CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY, owner TEXT, expires DOUBLE PRECISION);
                 CREATE TABLE IF NOT EXISTS documents(
                     id TEXT PRIMARY KEY, owner TEXT NOT NULL, kind TEXT NOT NULL,
@@ -114,12 +116,29 @@ class Workspace:
     def login(self, name, password):
         with self.connect() as db:
             row = db.execute('SELECT * FROM users WHERE name=?', (name.strip().casefold(),)).fetchone()
-        # Do the same expensive hash for unknown names.
-        salt, expected = (row['password'] if row else '00' * 16 + ':' + '00' * 64).split(':')
+        # Use the same work for unknown names and accounts that only use Google.
+        stored = row['password'] if row else ''
+        salt, expected = (stored or '00' * 16 + ':' + '00' * 64).split(':')
         actual = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1).hex()
-        if not row or not hmac.compare_digest(actual, expected):
+        if not stored or not hmac.compare_digest(actual, expected):
             raise HTTPException(401, 'Tài khoản hoặc mật khẩu không đúng.')
         return row['id']
+
+    def login_google(self, subject: str, email: str) -> str:
+        email = email.strip().casefold()
+        with self.connect(lock=f'google-login:{subject}') as db:
+            identity = db.execute('SELECT owner FROM google_identities WHERE subject=?', (subject,)).fetchone()
+            if identity:
+                return identity['owner']
+
+            owner = secrets.token_hex(16)
+            # A password account can use any name, so an email match does not prove ownership.
+            for name in (email, f'{email} (google)', f'{email} (google {owner})'):
+                created = db.execute('INSERT INTO users VALUES(?,?,?) ON CONFLICT DO NOTHING', (owner, name, ''))
+                if created.rowcount == 1:
+                    db.execute('INSERT INTO google_identities VALUES(?,?)', (subject, owner))
+                    return owner
+        raise HTTPException(409, 'Chưa tạo được tài khoản Google. Vui lòng thử lại.')
 
     def token(self, owner):
         token = secrets.token_urlsafe(32)

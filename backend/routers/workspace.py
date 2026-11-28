@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from cache.mockup_catalog import MOCKUP_KINDS
@@ -15,13 +15,66 @@ from core.workspace import workspace, current_owner
 from harness.design_validator import fetch_design, validate_design_bytes, MAX_DESIGN_BYTES
 from services.commerce import (DraftInput, draft_body, review_draft, submit_draft,
                                submission_dict, finish_submission, profit)
+from services import google_login
 
 router = APIRouter()
+GOOGLE_FLOW_COOKIE = 'bp_google_flow'
+GOOGLE_COOKIE_PATH = '/api/auth/google'
 
 
 class Credentials(BaseModel):
     name: str = Field(min_length=3, max_length=80)
     password: str = Field(min_length=10, max_length=256)
+
+
+def set_session_cookie(response: Response, owner: str):
+    response.set_cookie('bp_session', workspace.token(owner), httponly=True,
+                        secure=settings.COOKIE_SECURE, samesite='strict', max_age=86400 * 7, path='/')
+
+
+@router.get('/auth/options')
+def auth_options(response: Response):
+    response.headers['Cache-Control'] = 'no-store'
+    return {'google': google_login.callback_uri() is not None}
+
+
+def google_redirect(location: str) -> RedirectResponse:
+    return RedirectResponse(location, status_code=303, headers={
+        'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+    })
+
+
+@router.get('/auth/google')
+def start_google_login():
+    redirect_uri = google_login.callback_uri()
+    if redirect_uri is None:
+        raise HTTPException(404, 'Đăng nhập Google chưa được cấu hình.')
+
+    state, verifier, nonce = (secrets.token_urlsafe(32) for _ in range(3))
+    response = google_redirect(google_login.authorization_url(redirect_uri, state, verifier, nonce))
+    response.set_cookie(GOOGLE_FLOW_COOKIE, '.'.join((state, verifier, nonce)), max_age=600,
+                        path=GOOGLE_COOKIE_PATH, httponly=True, secure=redirect_uri.startswith('https:'),
+                        samesite='lax')
+    return response
+
+
+@router.get('/auth/google/callback')
+def finish_google_login(request: Request, code: str = '', state: str = '', error: str = ''):
+    response = google_redirect('/?auth_error=google')
+    flow = request.cookies.get(GOOGLE_FLOW_COOKIE, '').split('.')
+    if len(flow) != 3 or not state or not hmac.compare_digest(state.encode(), flow[0].encode()):
+        return response
+    response.delete_cookie(GOOGLE_FLOW_COOKIE, path=GOOGLE_COOKIE_PATH)
+    redirect_uri = google_login.callback_uri()
+    if error or not code or redirect_uri is None:
+        return response
+    try:
+        subject, email = google_login.exchange_identity(code, redirect_uri, flow[1], flow[2])
+    except ValueError:
+        return response
+    set_session_cookie(response, workspace.login_google(subject, email))
+    response.headers['Location'] = '/'
+    return response
 
 
 @router.post('/auth/{action}')
@@ -36,8 +89,7 @@ def auth(action: str, credentials: Credentials, response: Response, request: Req
         raise HTTPException(429, 'Thử đăng nhập quá nhiều lần. Vui lòng đợi một phút.')
     workspace.event(key, action)
     owner = (workspace.register if action == 'register' else workspace.login)(credentials.name, credentials.password)
-    response.set_cookie('bp_session', workspace.token(owner), httponly=True,
-                        secure=settings.COOKIE_SECURE, samesite='strict', max_age=86400 * 7, path='/')
+    set_session_cookie(response, owner)
     return {'name': credentials.name, 'store': settings.display_store_name, 'mode': 'single_store_demo'}
 
 

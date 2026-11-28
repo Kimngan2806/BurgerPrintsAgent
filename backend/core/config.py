@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     FILE_STORAGE_PATH: str = "data/designs"
     PUBLIC_FILE_BASE_URL: str = ""
     STORE_DISPLAY_NAME: str = "BurgerPrints"
+    GOOGLE_OAUTH_CLIENT_ID: str = ""
+    GOOGLE_OAUTH_CLIENT_SECRET: str = ""
+    GOOGLE_OAUTH_REDIRECT_URI: str = ""
     ORDER_SANDBOX: bool = True
     ENABLE_ORDER_SUBMISSION: bool = False
     STORE_TRANSACTION_NOTICE: str = ""

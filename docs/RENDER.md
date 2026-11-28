@@ -52,6 +52,20 @@ Nếu dùng BytePlus: đặt `PRIMARY_MODEL_PROVIDER=byteplus`, `SEEDANCE_API_KE
 
 Để thử gửi đơn từ chat trên Render, đặt `ORDER_SANDBOX=true` và `ENABLE_ORDER_SUBMISSION=true`. Khi xem xong bản duyệt trong chat, nhắn `XÁC NHẬN ĐƠN HÀNG` để gửi phiên bản đã duyệt. Nhắn `XEM BẢN DUYỆT` nếu đã sửa đơn hoặc bản duyệt hết hạn.
 
+## Đăng nhập bằng Google
+
+Trong [Google Auth Platform](https://console.cloud.google.com/auth/clients), cấu hình ứng dụng cho người dùng phù hợp và tạo OAuth client loại **Web application**. Thêm `https://burgerprints-agent.onrender.com/api/auth/google/callback` vào **Authorized redirect URIs**. Khi ứng dụng Google đang ở chế độ Testing, thêm địa chỉ Google cần thử vào **Test users**. [Hướng dẫn OAuth của Google](https://developers.google.com/identity/openid-connect/openid-connect)
+
+Thêm ba biến sau trong **Environment** của dịch vụ Render, sau đó lưu và triển khai lại.
+
+```dotenv
+GOOGLE_OAUTH_CLIENT_ID=<OAuth client ID>
+GOOGLE_OAUTH_CLIENT_SECRET=<OAuth client secret>
+GOOGLE_OAUTH_REDIRECT_URI=https://burgerprints-agent.onrender.com/api/auth/google/callback
+```
+
+Client secret chỉ dùng trên máy chủ. Nút **Tiếp tục với Google** xuất hiện khi đủ cấu hình. Lần đầu đăng nhập bằng Google tạo một tài khoản riêng. Lịch sử của tài khoản dùng mật khẩu vẫn truy cập bằng tên đăng nhập và mật khẩu cũ, kể cả khi tên đăng nhập trùng địa chỉ Gmail.
+
 ## Giới hạn đã chọn cho demo Free
 
 Theo [Render Free](https://render.com/docs/free), dịch vụ có thể ngủ sau 15 phút không hoạt động và mất thay đổi trên ổ đĩa khi khởi động lại. Khi có `WORKSPACE_DATABASE_URL` và key BurgerPrints, ứng dụng lưu bản catalog gần nhất đã đồng bộ thành công vào PostgreSQL. Nếu DuckDB trống lúc khởi động, ứng dụng nạp bản đó với thời điểm đồng bộ gốc rồi làm mới theo lịch. Lần đầu cần đồng bộ đầy đủ để tạo bản lưu. File thiết kế đã tải lên vẫn nằm trên ổ đĩa. Dữ liệu đã bị Render xóa trước khi kết nối PostgreSQL cần bản sao lưu để khôi phục.

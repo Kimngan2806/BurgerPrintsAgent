@@ -3,6 +3,7 @@ import io
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -52,6 +53,67 @@ def env(tmp_path, monkeypatch):
 def register(client, name='seller-a'):
     result = client.post('/api/auth/register', json={'name': name, 'password': 'a-long-password-123'})
     assert result.status_code == 200, result.text
+
+
+def test_google_login_requires_oauth_configuration(env, monkeypatch):
+    _, client = env
+    monkeypatch.setattr(settings, 'GOOGLE_OAUTH_CLIENT_ID', '')
+    assert client.get('/api/auth/options').json() == {'google': False}
+    assert client.get('/api/auth/google').status_code == 404
+
+
+def test_google_login_checks_state_and_keeps_password_account_separate(env, monkeypatch):
+    store, client = env
+    google_email = 'seller@example.com'
+    redirect_uri = 'http://localhost:3000/api/auth/google/callback'
+    monkeypatch.setattr(settings, 'GOOGLE_OAUTH_CLIENT_ID', 'test-client')
+    monkeypatch.setattr(settings, 'GOOGLE_OAUTH_CLIENT_SECRET', 'test-client-secret')
+    monkeypatch.setattr(settings, 'GOOGLE_OAUTH_REDIRECT_URI', redirect_uri)
+    monkeypatch.setattr(settings, 'COOKIE_SECURE', False)
+    register(client, google_email)
+    existing_owner = store.owner(client.cookies.get('bp_session'))
+    client.post('/api/conversations')
+    client.post('/api/logout')
+    assert client.get('/api/auth/options').json() == {'google': True}
+
+    query = {}
+    exchanges = []
+
+    def exchange(code, uri, verifier, nonce):
+        assert code == 'test-code' and uri == redirect_uri
+        assert routes.google_login.authorization_url(uri, query['state'][0], verifier, nonce).endswith(
+            urlsplit(google_location).query
+        )
+        exchanges.append(code)
+        return 'google-identity-1', google_email
+
+    monkeypatch.setattr(routes.google_login, 'exchange_identity', exchange)
+    for _ in range(2):
+        start = client.get('/api/auth/google', follow_redirects=False)
+        google_location = start.headers['location']
+        query = parse_qs(urlsplit(google_location).query)
+        assert start.status_code == 303 and query['scope'] == ['openid email']
+        assert query['code_challenge_method'] == ['S256']
+        rejected = client.get('/api/auth/google/callback', params={'code': 'test-code', 'state': 'wrong'},
+                              follow_redirects=False)
+        assert rejected.headers['location'] == '/?auth_error=google'
+        assert 'bp_session' not in client.cookies
+
+        signed_in = client.get('/api/auth/google/callback',
+                               params={'code': 'test-code', 'state': query['state'][0]}, follow_redirects=False)
+        assert signed_in.headers['location'] == '/' and routes.GOOGLE_FLOW_COOKIE not in client.cookies
+        owner = store.owner(client.cookies.get('bp_session'))
+        assert owner != existing_owner
+        assert client.get('/api/work/conversation').json() == []
+        assert owner == store.login_google('google-identity-1', google_email)
+        google_account_name = client.get('/api/me').json()['name']
+        client.post('/api/logout')
+
+    assert exchanges == ['test-code', 'test-code']
+    assert client.post('/api/auth/login', json={'name': google_account_name, 'password': 'a-long-password-123'}).status_code == 401
+    assert client.post('/api/auth/login', json={'name': google_email, 'password': 'a-long-password-123'}).status_code == 200
+    assert store.owner(client.cookies.get('bp_session')) == existing_owner
+    assert len(client.get('/api/work/conversation').json()) == 1
 
 
 def image_bytes():

@@ -18,6 +18,16 @@ type Order = {reference: string; state: string; result: Record<string, unknown>;
 type Review = {id: string; draft_version: number; summary: {store: string; sandbox: boolean; lines: (Line & {product_name: string; color: string; size: string; catalog_price: string | null; file: {name: string; sha256: string}; availability: {status: string}})[]; address: Address; cost_note: string; unknown_costs: string[]; transaction_notice: string}};
 type View = 'chat' | 'search' | 'draft' | 'designs' | 'orders' | 'support' | 'profit';
 
+const profitFields = [
+  {name: 'sale_price', label: 'Giá bán / sản phẩm', placeholder: '24.99', required: true},
+  {name: 'quantity', label: 'Số lượng', placeholder: '2', min: 1, max: 10000, step: 1, required: true},
+  {name: 'discount_percent', label: 'Giảm giá (%)', placeholder: '0', max: 100},
+  {name: 'production_per_item', label: 'Giá sản xuất / sản phẩm', placeholder: '8.50'},
+  {name: 'shipping_total', label: 'Tổng phí vận chuyển', placeholder: '5.00'},
+  {name: 'platform_total', label: 'Tổng phí nền tảng', placeholder: '2.50'},
+  {name: 'other_total', label: 'Tổng chi phí khác', placeholder: '1.00'},
+];
+
 const timeText = (timestamp?: number) => timestamp ? new Date(timestamp * 1000).toLocaleString('vi-VN') : 'Chưa có thời điểm cập nhật';
 const stateText: Record<string, string> = {sending: 'Đang gửi / cần đối chiếu nếu bị gián đoạn', verifying: 'Đang xác minh — không gửi lại', created: 'Đã xác nhận tạo đơn', rejected: 'Nguồn từ chối — sửa đơn rồi duyệt lại', unknown: 'Chưa xác minh', out_of_stock: 'Có trong danh sách hết hàng', not_listed_out_of_stock: 'Không nằm trong danh sách hết hàng; chưa bảo đảm nhận đơn'};
 
@@ -52,6 +62,7 @@ export default function WorkspacePage() {
   const [user, setUser] = useState<{name: string; store: string} | null>(null);
   const [ready, setReady] = useState(false);
   const [authMode, setAuthMode] = useState('login');
+  const [googleLogin, setGoogleLogin] = useState(false);
   const [view, setView] = useState<View>('chat');
   const [sidebar, setSidebar] = useState(false);
   const [dark, setDark] = useState(false);
@@ -115,10 +126,24 @@ export default function WorkspacePage() {
   }, []);
   useEffect(() => {
     void restoreSession();
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('auth_error') === 'google') {
+      setError('Đăng nhập Google chưa hoàn tất. Bạn có thể thử lại hoặc dùng tài khoản BurgerPrintsAgent.');
+      url.searchParams.delete('auth_error');
+      window.history.replaceState(window.history.state, '', url);
+    }
     const theme = localStorage.getItem('theme') === 'dark'; setDark(theme);
     document.documentElement.setAttribute('data-theme', theme ? 'dark' : 'light');
     return () => abort.current?.abort();
   }, [restoreSession]);
+  useEffect(() => {
+    if (!ready || user) return;
+    const controller = new AbortController();
+    void api<{google: boolean}>('/auth/options', 'GET', undefined, controller.signal)
+      .then(options => setGoogleLogin(options.google))
+      .catch(() => {});
+    return () => controller.abort();
+  }, [ready, user]);
   useEffect(() => {if (user) refreshLists().catch(e => setError(e.message));}, [user]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {if (nearBottom.current) bottom.current?.scrollIntoView({behavior: loading ? 'auto' : 'smooth'});}, [messages, loading]);
   useEffect(() => {draftRef.current = draft;}, [draft]);
@@ -239,6 +264,9 @@ export default function WorkspacePage() {
     <label>Mật khẩu<input name="password" type="password" autoComplete={authMode === 'register' ? 'new-password' : 'current-password'} minLength={10} maxLength={256} required /></label>
     {error && <p role="alert" className="error-banner">{error}</p>}
     <button className="primary" disabled={busy}>{busy ? 'Đang xử lý…' : authMode === 'register' ? 'Tạo tài khoản' : 'Đăng nhập'}</button>
+    {googleLogin && <button className="google-auth-button" type="button" disabled={busy} onClick={() => window.location.assign(apiUrl('/auth/google'))}>
+      <img src="/google-sign-in.png" width={18} height={18} alt="" />Tiếp tục với Google
+    </button>}
     <button type="button" onClick={() => {setAuthMode(authMode === 'login' ? 'register' : 'login'); setError('');}}>{authMode === 'login' ? 'Chưa có tài khoản? Đăng ký' : 'Đã có tài khoản? Đăng nhập'}</button>
   </form></main>;
 
@@ -255,7 +283,13 @@ export default function WorkspacePage() {
       <img className="brand-logo" src="/burgerprint-logo.svg" alt="BurgerPrints" />
       <button className="primary" disabled={loading || busy || dirty} onClick={() => {setConversation(null); setMessages([]); setDraft(null); draftRef.current = null; setReview(null); setView('chat'); setPanel(false); setSidebar(false);}}><Plus size={18} />Chat mới</button>
       <nav aria-label="Chức năng">{navigation.map(([key, label, icon]) => <button key={key} aria-current={view === key ? 'page' : undefined} onClick={() => navigate(key)}>{icon}{label}</button>)}</nav>
-      <p className="nav-caption">Lịch sử của bạn</p><div className="history-list">{conversations.map(c => <button key={c.id} disabled={loading || busy} onClick={() => run(() => openConversation(c.id))}>{c.title}</button>)}{!conversations.length && <p className="muted">Chưa có hội thoại</p>}</div>
+      <section className="nav-history" aria-labelledby="history-heading">
+        <h2 id="history-heading" className="nav-caption">Lịch sử của bạn</h2>
+        <div className="history-list">
+          {conversations.map(c => <button key={c.id} disabled={loading || busy} onClick={() => run(() => openConversation(c.id))}>{c.title}</button>)}
+          {!conversations.length && <p className="muted">Chưa có hội thoại</p>}
+        </div>
+      </section>
       <div className="nav-footer"><p>{user.name}</p><small>{user.store}</small>
         <button onClick={() => {const next = !dark; setDark(next); localStorage.setItem('theme', next ? 'dark' : 'light'); document.documentElement.setAttribute('data-theme', next ? 'dark' : 'light');}}>{dark ? <Sun size={16} /> : <Moon size={16} />}{dark ? 'Giao diện sáng' : 'Giao diện tối'}</button>
         <button disabled={loading || saving || dirty} onClick={() => run(logOut)}><LogOut size={16} />Đăng xuất</button>
@@ -288,7 +322,26 @@ export default function WorkspacePage() {
         {view === 'designs' && <DesignStudio assets={assets} busy={busy} refreshLists={refreshLists} run={run} onNotice={setNotice} />}
         {view === 'orders' && <><h1>Đơn hàng trong tài khoản</h1><p>Theo dõi các đơn bạn đã gửi từ BurgerPrintsAgent.</p><button onClick={() => run(refreshLists)}>Tải lại danh sách</button><div className="record-list">{orders.map(order => <article key={order.reference} className="order-card"><h3>{String(order.result.order_id || order.reference)}</h3><p><strong>{stateText[order.state] || order.state}</strong></p><p className="muted">Mã tham chiếu: {order.reference}<br />{timeText(order.updated_at)}</p><p>Trạng thái nguồn: {String((order.result.detail as Record<string, unknown> | undefined)?.state || (order.result.detail as Record<string, unknown> | undefined)?.status || 'Chưa cập nhật')}</p><button disabled={busy} onClick={() => run(async () => {await api(`/orders/${order.reference}/refresh`, 'POST'); await refreshLists();})}>Đối chiếu đơn và tracking</button>{Boolean(order.result.message) && <p>{String(order.result.message)}</p>}<OrderDetails result={order.result} /><button onClick={() => {navigate('support'); setNotice(`Mã tham chiếu cần hỗ trợ: ${order.reference}`);}}>Yêu cầu hỗ trợ</button></article>)}</div>{!orders.length && <p className="empty-state">Chưa có yêu cầu gửi đơn. Bạn có thể tiếp tục từ Đơn nháp.</p>}</>}
         {view === 'support' && <><h1>Yêu cầu hỗ trợ</h1><p>Lưu vấn đề và mã tham chiếu để tiếp tục xử lý. Chưa gửi yêu cầu tới BurgerPrints; chưa hỗ trợ hủy đơn tự động.</p><form className="stack-form" onSubmit={e => {e.preventDefault(); const data = Object.fromEntries(new FormData(e.currentTarget)); run(async () => {await api('/support', 'POST', data); await refreshLists(); setNotice('Đã lưu yêu cầu hỗ trợ trong ứng dụng.');});}}><label>Mã tham chiếu (nếu có)<input name="reference" /></label><label>Mô tả vấn đề<textarea name="message" required minLength={5} maxLength={6000} /></label><button className="primary" disabled={busy}>Lưu yêu cầu hỗ trợ</button></form><div className="record-list">{supports.map(s => <article key={s.id}><p>{s.message}</p><small>{s.note}</small></article>)}</div></>}
-        {view === 'profit' && <><h1>Lợi nhuận theo kịch bản</h1><p>Đơn vị USD. Giá bán và giá sản xuất theo sản phẩm; các phí khác là tổng cho số lượng đã nhập. Để trống khoản chưa biết.</p><form className="filter-form" onSubmit={e => {e.preventDefault(); const values = Object.fromEntries(new FormData(e.currentTarget)); run(async () => {setCalculation(await api('/profit', 'POST', {...values, quantity: Number(values.quantity)}));});}}>{[['sale_price', 'Giá bán / sản phẩm', '20'], ['quantity', 'Số lượng', '1'], ['discount_percent', 'Giảm giá (%)', '0'], ['production_per_item', 'Giá sản xuất / sản phẩm', ''], ['shipping_total', 'Tổng phí ship', ''], ['platform_total', 'Tổng phí nền tảng', ''], ['other_total', 'Tổng chi phí khác', '']].map(([name, label, value]) => <label key={name}>{label}<input name={name} type="number" min={name === 'quantity' ? 1 : 0} step={name === 'quantity' ? 1 : '.01'} defaultValue={value} required={['sale_price', 'quantity', 'discount_percent'].includes(name)} /></label>)}<button className="primary" disabled={busy}>Tính kịch bản</button></form>{calculation && <section className="calculation-result"><h2>{String(calculation.estimated_profit)} USD</h2><p>Lợi nhuận dự kiến · margin {calculation.margin_percent == null ? 'không xác định' : `${calculation.margin_percent}%`}</p><p>Doanh thu sau giảm giá: {String(calculation.revenue)} USD</p>{Object.entries(calculation.costs as Record<string, string>).map(([k,v]) => <p key={k}>{k}: {v} USD · người bán nhập</p>)}<p>Chưa xác định: {(calculation.unknown_costs as string[]).join(', ') || 'Không có khoản bỏ trống trong biểu mẫu'}</p><small>{String(calculation.note)}</small></section>}<details><summary>Số liệu sử dụng của tài khoản</summary>{metrics.map(m => <p key={m.name}>{m.name}: {m.count}</p>)}</details></>}
+        {view === 'profit' && <>
+          <h1>Lợi nhuận theo kịch bản</h1>
+          <p>Số màu xám là ví dụ. Nhập giá bằng USD, tính theo từng sản phẩm. Các khoản phí là tổng cho số lượng đã nhập. Bạn có thể để trống giảm giá và chi phí chưa biết.</p>
+          <form className="filter-form profit-form" onSubmit={e => {
+            e.preventDefault();
+            const entries = Array.from(new FormData(e.currentTarget)).filter(([, value]) => value !== '');
+            const values = Object.fromEntries(entries);
+            run(async () => {
+              setCalculation(await api('/profit', 'POST', {...values, quantity: Number(values.quantity)}));
+            });
+          }}>
+            {profitFields.map(({label, name, min = 0, step = 0.01, ...field}) => <label key={name}>
+              {label}
+              <input {...field} name={name} type="number" min={min} step={step} />
+            </label>)}
+            <button className="primary" disabled={busy}>Tính kịch bản</button>
+          </form>
+          {calculation && <section className="calculation-result"><h2>{String(calculation.estimated_profit)} USD</h2><p>Lợi nhuận dự kiến · margin {calculation.margin_percent == null ? 'không xác định' : `${calculation.margin_percent}%`}</p><p>Doanh thu sau giảm giá: {String(calculation.revenue)} USD</p>{Object.entries(calculation.costs as Record<string, string>).map(([k,v]) => <p key={k}>{k}: {v} USD · người bán nhập</p>)}<p>Chưa xác định: {(calculation.unknown_costs as string[]).join(', ') || 'Không có khoản bỏ trống trong biểu mẫu'}</p><small>{String(calculation.note)}</small></section>}
+          <details><summary>Số liệu sử dụng của tài khoản</summary>{metrics.map(m => <p key={m.name}>{m.name}: {m.count}</p>)}</details>
+        </>}
       </div>}
     </main>
     {panel && <aside className="context-panel" aria-label="Đơn nháp đang làm"><div className="panel-heading"><h2>Đơn nháp</h2><button aria-label="Đóng bảng đơn nháp" onClick={() => setPanel(false)}><X size={20} /></button></div>

@@ -61,13 +61,15 @@ html, body { height: 100%; }
 .workspace-shell h2 {font-size:22px}.workspace-shell h3 {font-size:16px}
 .workspace-shell p {margin:8px 0}.muted {color:var(--text-secondary);font-size:12px}
 .workspace-nav {width:244px;flex-shrink:0;background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;gap:22px;padding:26px 16px;overflow:auto}
+.workspace-nav > :not(.nav-history) {flex-shrink:0}
 .workspace-nav .brand-logo {width:174px;height:auto;align-self:flex-start;margin:0 8px}
 .workspace-nav nav {display:flex;flex-direction:column;gap:4px}
 .workspace-nav nav button,.history-list button,.nav-footer button {justify-content:flex-start;border:0;background:transparent}
 .workspace-nav nav button[aria-current=page] {background:var(--bg-hover);font-weight:600;color:var(--accent-text)}
-.nav-caption {font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:-14px!important}
-.history-list {display:flex;flex-direction:column;min-height:60px;max-height:230px;overflow:auto;gap:3px}
-.history-list button {display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+.nav-history {display:flex;flex-direction:column;flex:1 1 0;min-height:150px;gap:8px}
+.workspace-nav .nav-caption {font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-secondary)}
+.history-list {display:flex;flex-direction:column;min-height:0;overflow-y:auto;gap:6px;padding:4px;scrollbar-gutter:stable}
+.workspace-shell .history-list button {display:block;flex:none;padding:9px 10px;font-size:13px;line-height:1.45;white-space:normal;overflow-wrap:anywhere}
 .nav-footer {margin-top:auto;display:flex;flex-direction:column;gap:7px;font-size:12px}
 .nav-footer small {color:var(--text-secondary)}
 .workspace-main {display:flex;flex-direction:column;flex:1;min-width:0;overflow:hidden}
@@ -92,6 +94,7 @@ html, body { height: 100%; }
 .product-card label {margin:12px 0}.product-card button {width:100%;margin-top:10px}
 .image-placeholder {height:140px;border-radius:8px;background:var(--bg-user);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--text-muted);font-size:12px;margin-bottom:14px}
 .filter-form {display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:15px;align-items:end;margin:24px 0}
+.profit-form input::placeholder {color:var(--text-secondary);opacity:1}
 .record-list {display:flex;flex-direction:column;gap:14px;margin:24px 0}
 .record-list>button {flex-direction:column;align-items:flex-start;word-break:break-word}
 .record-list>button span {font-size:12px;color:var(--text-secondary)}
@@ -119,6 +122,9 @@ html, body { height: 100%; }
 .auth-screen {height:100dvh;overflow:auto;display:grid;place-items:center;padding:24px;background:var(--bg-sidebar)}
 .auth-card {width:100%;max-width:460px;display:flex;flex-direction:column;gap:18px;padding:35px;background:var(--bg);border:1px solid var(--border);border-radius:18px}
 .auth-card h1 {font-size:25px;line-height:1.2}.auth-card p {font-size:13px;color:var(--text-secondary)}
+.auth-screen .google-auth-button {background:#fff;color:#1f1f1f;border-color:#747775;padding:9px 12px;gap:10px;font:500 14px/20px 'Google Sans',Arial,sans-serif}
+.google-auth-button img {object-fit:contain}
+.auth-screen .google-auth-button:hover {background:#f8faff}
 .mobile-menu,.sidebar-scrim {display:none!important}
 @media(max-width:1200px) {.workspace-nav {width:205px}.context-panel {width:325px}.workspace-header {padding:14px 20px}.workspace-chat,.workspace-content {padding:24px}}
 @media(max-width:900px) {.workspace-nav {display:none}.workspace-nav.is-open {display:flex;position:fixed;inset:0 auto 0 0;width:260px;z-index:40}.mobile-menu {display:inline-flex!important}.sidebar-scrim {display:block!important;position:fixed;inset:0;border:0!important;border-radius:0!important;background:#0007!important;z-index:35}.context-panel {position:fixed;inset:0 0 0 auto;width:min(100%,420px);z-index:30;box-shadow:-12px 0 40px #0002}.entry-grid {gap:10px}.welcome {margin-top:25px}}
