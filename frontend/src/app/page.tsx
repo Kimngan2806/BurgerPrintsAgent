@@ -286,7 +286,7 @@ export default function WorkspacePage() {
       <section className="nav-history" aria-labelledby="history-heading">
         <h2 id="history-heading" className="nav-caption">Lịch sử của bạn</h2>
         <div className="history-list">
-          {conversations.map(c => <button key={c.id} disabled={loading || busy} onClick={() => run(() => openConversation(c.id))}>{c.title}</button>)}
+          {conversations.map(c => <button key={c.id} title={c.title} disabled={loading || busy} onClick={() => run(() => openConversation(c.id))}>{c.title}</button>)}
           {!conversations.length && <p className="muted">Chưa có hội thoại</p>}
         </div>
       </section>

@@ -60,18 +60,60 @@ html, body { height: 100%; }
 .workspace-shell h1 {font-size:30px;line-height:1.2;letter-spacing:-.8px;margin-bottom:14px}
 .workspace-shell h2 {font-size:22px}.workspace-shell h3 {font-size:16px}
 .workspace-shell p {margin:8px 0}.muted {color:var(--text-secondary);font-size:12px}
-.workspace-nav {width:244px;flex-shrink:0;background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;gap:22px;padding:26px 16px;overflow:auto}
-.workspace-nav > :not(.nav-history) {flex-shrink:0}
+.workspace-nav {
+  width: 244px;
+  flex-shrink: 0;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.8dvh, 18px);
+  padding: clamp(12px, 2.4dvh, 22px) 16px;
+  overflow: hidden;
+}
+.workspace-nav > :where(:not(.nav-history)) {flex-shrink:0}
 .workspace-nav .brand-logo {width:174px;height:auto;align-self:flex-start;margin:0 8px}
 .workspace-nav nav {display:flex;flex-direction:column;gap:4px}
 .workspace-nav nav button,.history-list button,.nav-footer button {justify-content:flex-start;border:0;background:transparent}
+.workspace-nav nav button,.nav-footer button {padding-block:8px}
 .workspace-nav nav button[aria-current=page] {background:var(--bg-hover);font-weight:600;color:var(--accent-text)}
-.nav-history {display:flex;flex-direction:column;flex:1 1 0;min-height:150px;gap:8px}
+.nav-history {display:flex;flex-direction:column;flex:1;min-height:0;gap:8px}
 .workspace-nav .nav-caption {font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-secondary)}
-.history-list {display:flex;flex-direction:column;min-height:0;overflow-y:auto;gap:6px;padding:4px;scrollbar-gutter:stable}
-.workspace-shell .history-list button {display:block;flex:none;padding:9px 10px;font-size:13px;line-height:1.45;white-space:normal;overflow-wrap:anywhere}
-.nav-footer {margin-top:auto;display:flex;flex-direction:column;gap:7px;font-size:12px}
+.history-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  gap: 4px;
+  padding: 4px;
+}
+.workspace-shell .history-list button {
+  display: block;
+  flex: none;
+  min-height: 38px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-footer {display:flex;flex-direction:column;gap:4px;font-size:12px}
+.workspace-nav .nav-footer p,.nav-footer small {margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .nav-footer small {color:var(--text-secondary)}
+@media (max-height: 650px) {
+  .workspace-nav {gap:10px;padding-block:12px}
+  .workspace-nav nav {gap:2px}
+  .workspace-nav nav button,.nav-footer button {padding-block:6px}
+}
+@media (max-height: 540px) {
+  .workspace-nav > nav {flex-shrink:1;min-height:36px;overflow-y:auto}
+  .workspace-nav > nav button {flex-shrink:0}
+  .nav-history {min-height:70px}
+}
 .workspace-main {display:flex;flex-direction:column;flex:1;min-width:0;overflow:hidden}
 .workspace-header {min-height:82px;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 28px;border-bottom:1px solid var(--border)}
 .workspace-header p {margin:0}.workspace-header strong {font-size:15px}
